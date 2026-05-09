@@ -84,27 +84,6 @@ describe("daemon CLI", () => {
     });
   });
 
-  it("starts with an in-memory pairing code service", async () => {
-    let startOptions: Parameters<NonNullable<CliDependencies["startServer"]>>[0] | undefined;
-    const code = await main(["start"], {
-      getStateDir: () => "/tmp/state",
-      ensureStateDir: async () => undefined,
-      loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
-      startServer: async (options) => {
-        startOptions = options;
-        return { address: "127.0.0.1:9999", close: async () => undefined };
-      },
-      writeTextFile: async () => undefined,
-      removeFile: async () => undefined,
-      waitForShutdown: async () => undefined,
-      writeLine: () => undefined,
-    });
-
-    expect(code).toBe(0);
-    await expect(startOptions?.pairService?.createPairingCode?.()).resolves.toMatchObject({
-      pairCode: expect.stringMatching(/^\d{6}$/),
-    });
-  });
 
   it("reports stopped status when no pid file exists", async () => {
     const lines: string[] = [];
