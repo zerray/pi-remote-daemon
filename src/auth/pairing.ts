@@ -18,11 +18,7 @@ export function createPairingCode(now: Date, ttlMs: number): CreatedPairingCode 
 }
 
 export function hashPairingCode(rawCode: string): string {
-  // Hash the short pairing code with a daemon-local format.
-  // Return an encoded string that can be compared later.
-  void rawCode;
-  void createHash;
-  throw new NotImplementedError("hashPairingCode");
+  return createHash("sha256").update(rawCode).digest("hex");
 }
 
 export function canClaimPairingCode(pairingCode: PairingCode, rawCode: string, now: Date): boolean {
