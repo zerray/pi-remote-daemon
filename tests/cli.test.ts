@@ -90,4 +90,26 @@ describe("daemon CLI", () => {
     expect(code).toBe(1);
     expect(lines).toEqual(["pi-remote-daemon is not running"]);
   });
+
+  it("stops a running daemon from its pid file", async () => {
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const code = await main(["stop", "--state-dir", "/tmp/state"], {
+      readTextFile: async () => "1234\n",
+      sendSignal: (pid, signal) => {
+        calls.push({ sendSignal: pid, signal });
+      },
+      removeFile: async (path) => {
+        calls.push({ removeFile: path });
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      { sendSignal: 1234, signal: "SIGTERM" },
+      { removeFile: "/tmp/state/daemon.pid" },
+    ]);
+    expect(lines).toEqual(["pi-remote-daemon stop requested (pid 1234)"]);
+  });
 });

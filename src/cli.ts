@@ -16,6 +16,7 @@ export type CliDependencies = {
   writeTextFile?: (path: string, content: string) => Promise<void>;
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
+  sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
 };
@@ -64,8 +65,13 @@ async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
   const writeLine = deps.writeLine ?? console.log;
   const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
 
+  const pidFile = join(stateDir, "daemon.pid");
   try {
-    await readTextFile(join(stateDir, "daemon.pid"));
+    const pid = Number.parseInt((await readTextFile(pidFile)).trim(), 10);
+    (deps.sendSignal ?? process.kill)(pid, "SIGTERM");
+    await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
+    writeLine(`pi-remote-daemon stop requested (pid ${pid})`);
+    return 0;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       writeLine("pi-remote-daemon is not running");
@@ -73,8 +79,6 @@ async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
     }
     throw error;
   }
-
-  throw new Error("stop running daemon is not implemented yet");
 }
 
 async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
