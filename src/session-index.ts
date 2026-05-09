@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NotImplementedError } from "./errors.js";
 import type { ProjectRecord, SessionIndexRecord } from "./types.js";
 
@@ -10,17 +11,15 @@ export type PiSessionSummary = {
 };
 
 export function daemonSessionIdForFile(sessionFile: string): string {
-  // Derive a stable daemon-facing session id from the canonical session file path.
-  // Use a prefix suitable for API responses.
-  void sessionFile;
-  throw new NotImplementedError("daemonSessionIdForFile");
+  return `sess_${stableHexId(sessionFile)}`;
 }
 
 export function projectIdForPath(projectPath: string): string {
-  // Derive a stable project id from the canonical project path.
-  // Use a prefix suitable for API responses.
-  void projectPath;
-  throw new NotImplementedError("projectIdForPath");
+  return `proj_${stableHexId(projectPath)}`;
+}
+
+function stableHexId(input: string): string {
+  return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
 export function toSessionIndexRecord(project: ProjectRecord, piSession: PiSessionSummary): SessionIndexRecord {
