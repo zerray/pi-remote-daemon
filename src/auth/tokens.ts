@@ -1,4 +1,4 @@
-import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { NotImplementedError } from "../errors.js";
 
@@ -8,11 +8,10 @@ export type IssuedDeviceToken = {
 };
 
 export function issueDeviceToken(): IssuedDeviceToken {
-  // Generate a high-entropy random token.
-  // Prefix it for easy identification in logs and Keychain.
-  // Hash it before returning the persistable tokenHash.
-  void randomBytes;
-  throw new NotImplementedError("issueDeviceToken");
+  const rawToken = `prd_${randomBytes(32).toString("base64url")}`;
+  const salt = randomBytes(16).toString("base64url");
+  const derived = scryptSync(rawToken, salt, 32).toString("base64url");
+  return { rawToken, tokenHash: `scrypt:${salt}:${derived}` };
 }
 
 export async function hashDeviceToken(rawToken: string, salt?: string): Promise<string> {
