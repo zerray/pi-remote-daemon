@@ -22,12 +22,6 @@ export async function loadDaemonConfig(stateDir: string): Promise<DaemonConfig> 
 }
 
 export async function saveDaemonConfig(stateDir: string, config: DaemonConfig): Promise<void> {
-  // Validate the config shape.
-  // Serialize as pretty JSON.
-  // Write config.json with owner-readable permissions only.
-  void stateDir;
-  void config;
-  void writeFile;
-  void join;
-  throw new NotImplementedError("saveDaemonConfig");
+  const content = `${JSON.stringify(config, null, 2)}\n`;
+  await writeFile(join(stateDir, "config.json"), content, { mode: 0o600 });
 }
