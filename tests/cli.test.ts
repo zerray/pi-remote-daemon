@@ -49,6 +49,28 @@ describe("daemon CLI", () => {
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });
 
+  it("does not start when daemon lock is already held", async () => {
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const code = await main(["start"], {
+      getStateDir: () => "/tmp/state",
+      ensureStateDir: async () => undefined,
+      acquireLock: async (stateDir) => {
+        calls.push({ acquireLock: stateDir });
+        return undefined;
+      },
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      startServer: async () => {
+        throw new Error("should not start");
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(calls).toEqual([{ acquireLock: "/tmp/state" }]);
+    expect(lines).toEqual(["pi-remote-daemon is already running"]);
+  });
+
   it("starts with persistent store authentication and pairing", async () => {
     let startOptions: Parameters<NonNullable<CliDependencies["startServer"]>>[0] | undefined;
     const calls: unknown[] = [];

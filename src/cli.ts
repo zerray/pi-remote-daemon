@@ -2,6 +2,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
+import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
@@ -13,6 +14,7 @@ export type CliDependencies = {
   loadConfig?: (stateDir: string) => Promise<DaemonConfig>;
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
   openStore?: (stateDir: string) => DaemonStore;
+  acquireLock?: (stateDir: string) => Promise<DaemonLock | undefined>;
   waitForShutdown?: () => Promise<void>;
   readTextFile?: (path: string) => Promise<string>;
   writeTextFile?: (path: string, content: string) => Promise<void>;
@@ -38,6 +40,12 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   const parsed = parseStartArgs(argv.slice(1));
   const stateDir = parsed.stateDir ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
   await (deps.ensureStateDir ?? ensureDaemonStateDir)(stateDir);
+
+  const lock = await (deps.acquireLock ?? acquireDaemonLock)(stateDir);
+  if (!lock) {
+    (deps.writeLine ?? console.log)("pi-remote-daemon is already running");
+    return 1;
+  }
 
   const loadedConfig = await (deps.loadConfig ?? loadDaemonConfig)(stateDir).catch((error) => {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
@@ -71,6 +79,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   await server.close();
   store.close();
   await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
+  await lock.release();
   return 0;
 }
 
