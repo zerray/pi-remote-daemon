@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import WebSocket from "ws";
 import { describe, expect, it } from "vitest";
+import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 import { openDaemonStore } from "../src/persistence/daemon-store.js";
 import { startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
@@ -48,7 +49,19 @@ describe("daemon HTTP server", () => {
     });
   });
 
-  it("lists configured projects for authenticated devices", async () => {
+  it("lists active TUI projects for authenticated devices", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
     await withServer(
       async (baseUrl) => {
         const response = await fetch(`${baseUrl}/v1/projects`, {
@@ -61,10 +74,7 @@ describe("daemon HTTP server", () => {
         });
       },
       {
-        config: {
-          bindAddress: "127.0.0.1:0",
-          allowedProjects: [{ id: "proj_1", name: "Example", path: "/repo/example" }],
-        },
+        activeSessions,
         authenticateToken: (token) => token === "test-token",
       },
     );

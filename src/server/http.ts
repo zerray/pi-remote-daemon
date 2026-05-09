@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
+import type { ActiveSessionRegistry } from "../active-session-registry.js";
 import type { DaemonConfig } from "../types.js";
 
 export type RemoteSessionSummary = {
@@ -69,6 +70,7 @@ export type StartServerOptions = {
   daemonVersion?: string;
   authenticateToken?: (token: string) => boolean | Promise<boolean>;
   sessionService?: SessionService;
+  activeSessions?: ActiveSessionRegistry;
   pairService?: PairService;
 };
 
@@ -137,7 +139,7 @@ async function handleHttpRequest(
       return;
     }
 
-    writeJson(response, 200, { projects: options.config.allowedProjects ?? [] });
+    writeJson(response, 200, { projects: options.activeSessions?.listProjects() ?? options.config.allowedProjects ?? [] });
     return;
   }
 
@@ -176,7 +178,7 @@ async function handleHttpRequest(
     }
 
     const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
-    const state = await options.sessionService?.getSessionState?.(sessionId);
+    const state = options.activeSessions?.getSessionState(sessionId) ?? (await options.sessionService?.getSessionState?.(sessionId));
     writeJson(response, 200, state ?? { session: { id: sessionId }, messages: [], tools: [], isStreaming: false, pendingMessageCount: 0 });
     return;
   }
@@ -195,7 +197,7 @@ async function handleHttpRequest(
       return;
     }
 
-    const sessions = await options.sessionService?.listProjectSessions?.(projectId);
+    const sessions = options.activeSessions?.listProjectSessions(projectId) ?? (await options.sessionService?.listProjectSessions?.(projectId));
     writeJson(response, 200, { sessions: sessions ?? [] });
     return;
   }
