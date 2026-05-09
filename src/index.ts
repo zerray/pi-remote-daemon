@@ -4,6 +4,7 @@ export * from "./config.js";
 export * from "./errors.js";
 export * from "./lock.js";
 export * from "./paths.js";
+export * from "./pi-session-service.js";
 export * from "./persistence/daemon-store.js";
 export * from "./persistence/schema.js";
 export * from "./server/events.js";
