@@ -7,6 +7,7 @@ import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import type { DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { buildPairingLink } from "./pairing-link.js";
+import { formatPairingDisplay } from "./qr.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
 import type { DaemonConfig } from "./types.js";
 
@@ -105,9 +106,9 @@ async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
       pairCode: result.pairCode,
       expiresAt: result.expiresAt,
     });
-    writeLine(`Pair code: ${result.pairCode}`);
-    writeLine(`Expires at: ${result.expiresAt}`);
-    writeLine(`Pairing link: ${pairingLink}`);
+    for (const line of formatPairingDisplay({ pairCode: result.pairCode, expiresAt: result.expiresAt, pairingLink })) {
+      writeLine(line);
+    }
     return 0;
   } finally {
     store.close();

@@ -345,7 +345,9 @@ describe("daemon CLI", () => {
 
     expect(code).toBe(0);
     expect(calls).toEqual([{ ensureStateDir: "/tmp/state" }, { openStore: "/tmp/state" }, { closeStore: true }]);
-    expect(lines).toEqual([
+    expect(lines[0]).toBe("Scan with Pi iOS app:");
+    expect(lines[1]).toContain("█");
+    expect(lines.slice(2)).toEqual([
       "Pair code: 123456",
       "Expires at: 2026-05-09T00:01:00.000Z",
       "Pairing link: pi-remote://pair?baseUrl=https%3A%2F%2Fmacbook.tailnet.ts.net%3A17373&code=123456&expiresAt=2026-05-09T00%3A01%3A00.000Z",
