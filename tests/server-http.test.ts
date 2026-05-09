@@ -143,6 +143,44 @@ describe("daemon HTTP server", () => {
             updatedAt: "2026-05-09T00:00:00.000Z",
             messageCount: 0,
           }),
+          getSessionState: async () => {
+            throw new Error("not used");
+          },
+        },
+      },
+    );
+  });
+
+  it("returns an authenticated session snapshot", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          session: { id: "sess_1" },
+          messages: [],
+          tools: [],
+          isStreaming: false,
+          pendingMessageCount: 0,
+        });
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          listProjectSessions: async () => [],
+          createProjectSession: async () => {
+            throw new Error("not used");
+          },
+          getSessionState: async (sessionId) => ({
+            session: { id: sessionId },
+            messages: [],
+            tools: [],
+            isStreaming: false,
+            pendingMessageCount: 0,
+          }),
         },
       },
     );

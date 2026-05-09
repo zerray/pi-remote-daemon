@@ -12,9 +12,18 @@ export type RemoteSessionSummary = {
   messageCount: number;
 };
 
+export type RemoteSessionState = {
+  session: unknown;
+  messages: unknown[];
+  tools: unknown[];
+  isStreaming: boolean;
+  pendingMessageCount: number;
+};
+
 export type SessionService = {
-  listProjectSessions(projectId: string): Promise<RemoteSessionSummary[]>;
-  createProjectSession(projectId: string): Promise<RemoteSessionSummary>;
+  listProjectSessions?(projectId: string): Promise<RemoteSessionSummary[]>;
+  createProjectSession?(projectId: string): Promise<RemoteSessionSummary>;
+  getSessionState?(sessionId: string): Promise<RemoteSessionState>;
 };
 
 export type DaemonServer = {
@@ -79,6 +88,19 @@ async function handleHttpRequest(
     return;
   }
 
+  const sessionMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)$/);
+  if (request.method === "GET" && sessionMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
+    const state = await options.sessionService?.getSessionState?.(sessionId);
+    writeJson(response, 200, state ?? { session: { id: sessionId }, messages: [], tools: [], isStreaming: false, pendingMessageCount: 0 });
+    return;
+  }
+
   const projectSessionsMatch = request.url?.match(/^\/v1\/projects\/([^/]+)\/sessions$/);
   if ((request.method === "GET" || request.method === "POST") && projectSessionsMatch) {
     if (!(await isAuthorized(request, options))) {
@@ -88,12 +110,12 @@ async function handleHttpRequest(
 
     const projectId = decodeURIComponent(projectSessionsMatch[1] ?? "");
     if (request.method === "POST") {
-      const session = await options.sessionService?.createProjectSession(projectId);
+      const session = await options.sessionService?.createProjectSession?.(projectId);
       writeJson(response, 200, { session });
       return;
     }
 
-    const sessions = await options.sessionService?.listProjectSessions(projectId);
+    const sessions = await options.sessionService?.listProjectSessions?.(projectId);
     writeJson(response, 200, { sessions: sessions ?? [] });
     return;
   }
