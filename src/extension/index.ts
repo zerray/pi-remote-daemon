@@ -26,7 +26,12 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       }
       const sessionId = daemonSessionId(ctx);
       if (activeSessionIds.has(sessionId)) {
-        await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        try {
+          await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        } catch (error) {
+          ctx.ui.notify(`Remote control disable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+          return;
+        }
         activeSessionIds.delete(sessionId);
         clearInterval(pollTimers.get(sessionId));
         pollTimers.delete(sessionId);
@@ -34,11 +39,17 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(toRegistration(ctx)),
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(toRegistration(ctx)),
+        });
+      } catch (error) {
+        ctx.ui.notify(`Remote control enable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        return;
+      }
       if (!response.ok) {
         ctx.ui.notify(`Remote control enable failed: HTTP ${response.status}`, "error");
         return;
@@ -153,7 +164,7 @@ async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
 }
 
 function daemonBaseUrl(): string {
-  return process.env.PI_REMOTE_CONTROL_URL ?? "http://127.0.0.1:17373";
+  return process.env.PI_REMOTE_CONTROL_LOCAL_URL ?? "http://127.0.0.1:17373";
 }
 
 function cliCommand(): { command: string; args: string[] } {

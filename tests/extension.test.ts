@@ -156,6 +156,36 @@ describe("remote control extension", () => {
     });
   });
 
+  it("reports registration network failures without throwing", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx, notifications } = createContext();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.endsWith("/v1/health")) return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+      throw new TypeError("fetch failed");
+    }));
+    remoteControlExtension(pi as never);
+
+    await expect(commands.find((command) => command.name === "remote-control")!.handler("", ctx)).resolves.toBeUndefined();
+
+    expect(notifications.at(-1)).toEqual({ message: "Remote control enable failed: fetch failed", type: "error" });
+  });
+
+  it("uses localhost for TUI control even when PI_REMOTE_CONTROL_URL is advertised for pairing", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    const urls: string[] = [];
+    vi.stubEnv("PI_REMOTE_CONTROL_URL", "https://macbook.tailnet.ts.net:17373");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+    }));
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    expect(urls.at(-1)).toBe("http://127.0.0.1:17373/v1/tui/sessions");
+  });
+
   it("toggles off an already registered TUI session", async () => {
     const { pi, commands } = createFakePi();
     const { ctx, notifications } = createContext();
