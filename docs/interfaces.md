@@ -95,7 +95,7 @@ Response:
 }
 ```
 
-`POST /v1/projects/{projectId}/sessions` is not part of the MVP. New sessions are created in the Pi TUI, then made visible by running `/remote-control`.
+`POST /v1/projects/{projectId}/sessions` returns `405 method_not_allowed`. New sessions are created in the Pi TUI, then made visible by running `/remote-control`.
 
 `GET /v1/sessions/{sessionId}`
 
@@ -233,7 +233,7 @@ Command acknowledgements are not part of the current MVP protocol.
 
 ## Pi integration boundary
 
-The daemon keeps Pi-specific event normalization inside the package. Pi SDK/RPC is not used by the daemon to operate sessions in the MVP; those calls are made by the live TUI process through the extension API.
+The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is not used by the daemon to operate sessions in the MVP; those calls are made by the live TUI process through the extension API.
 
 | Action | Owner |
 | --- | --- |
