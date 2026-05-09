@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
+import { WebSocketServer } from "ws";
 import type { DaemonConfig } from "../types.js";
 
 export type RemoteSessionSummary = {
@@ -31,6 +33,7 @@ export type SessionService = {
   getSessionState?(sessionId: string): Promise<RemoteSessionState>;
   promptSession?(sessionId: string, request: PromptSessionRequest): Promise<void>;
   abortSession?(sessionId: string): Promise<void>;
+  streamSession?(sessionId: string, send: (event: unknown) => void): Promise<void>;
 };
 
 export type DaemonServer = {
@@ -67,6 +70,11 @@ export async function startDaemonServer(options: StartServerOptions): Promise<Da
   const server = createServer((request, response) => {
     void handleHttpRequest(request, response, options);
   });
+  const webSockets = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (request, socket, head) => {
+    void handleUpgrade(request, socket, head, webSockets, options);
+  });
 
   const { host, port } = parseBindAddress(options.config.bindAddress);
   await new Promise<void>((resolve, reject) => {
@@ -82,6 +90,7 @@ export async function startDaemonServer(options: StartServerOptions): Promise<Da
     address: `${address.address}:${address.port}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        webSockets.close();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
@@ -178,6 +187,35 @@ async function handleHttpRequest(
   }
 
   writeJson(response, 404, { error: "not_found" });
+}
+
+async function handleUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  webSockets: WebSocketServer,
+  options: StartServerOptions,
+): Promise<void> {
+  const streamMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
+  if (!streamMatch) {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  if (!(await isAuthorized(request, options))) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  const sessionId = decodeURIComponent(streamMatch[1] ?? "");
+  webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+    webSockets.emit("connection", webSocket, request);
+    void options.sessionService?.streamSession?.(sessionId, (event) => {
+      if (webSocket.readyState === webSocket.OPEN) webSocket.send(JSON.stringify(event));
+    });
+  });
 }
 
 async function isAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {

@@ -1,3 +1,4 @@
+import WebSocket from "ws";
 import { describe, expect, it } from "vitest";
 import { startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
@@ -256,6 +257,35 @@ describe("daemon HTTP server", () => {
           claimPairingCode: async (request) => {
             expect(request).toEqual({ pairCode: "123456", deviceName: "iPhone" });
             return { deviceId: "dev_1", token: "prd_token", daemonName: "test-daemon" };
+          },
+        },
+      },
+    );
+  });
+
+  it("streams session events over authenticated WebSocket", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace(/^http:/, "ws:");
+        const message = await new Promise<unknown>((resolve, reject) => {
+          const socket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          socket.once("message", (data) => {
+            resolve(JSON.parse(String(data)));
+            socket.close();
+          });
+          socket.once("error", reject);
+        });
+
+        expect(message).toEqual({ type: "agent_done" });
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          streamSession: async (sessionId, send) => {
+            expect(sessionId).toBe("sess_1");
+            send({ type: "agent_done" });
           },
         },
       },
