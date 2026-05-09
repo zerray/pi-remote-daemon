@@ -1,11 +1,20 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { RemoteTuiCommand } from "../active-session-registry.js";
 import { projectIdForPath } from "../session-index.js";
 
 export default function remoteControlExtension(pi: ExtensionAPI): void {
   const activeSessionIds = new Set<string>();
+  const pollTimers = new Map<string, NodeJS.Timeout>();
+  const forward = (event: unknown, ctx: ExtensionContext) => {
+    const sessionId = daemonSessionId(ctx);
+    if (activeSessionIds.has(sessionId)) void postTuiEvent(sessionId, event);
+  };
+
+  registerEventForwarders(pi, forward);
+
   pi.registerCommand("remote-control", {
     description: "Toggle Pi remote control for this TUI session",
     handler: async (_args, ctx) => {
@@ -14,6 +23,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       if (activeSessionIds.has(sessionId)) {
         await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
         activeSessionIds.delete(sessionId);
+        clearInterval(pollTimers.get(sessionId));
+        pollTimers.delete(sessionId);
         ctx.ui.notify("Remote control disabled for this session", "info");
         return;
       }
@@ -28,6 +39,9 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         return;
       }
       activeSessionIds.add(sessionId);
+      const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId).catch(() => undefined), 1000);
+      timer.unref?.();
+      pollTimers.set(sessionId, timer);
       ctx.ui.notify("Remote control enabled for this session", "info");
     },
   });
@@ -44,6 +58,17 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       ctx.ui.notify(output, result.code === 0 ? "info" : "error");
     },
   });
+}
+
+function registerEventForwarders(pi: ExtensionAPI, forward: (event: unknown, ctx: ExtensionContext) => void): void {
+  pi.on("message_start", forward);
+  pi.on("message_update", forward);
+  pi.on("message_end", forward);
+  pi.on("tool_execution_start", forward);
+  pi.on("tool_execution_update", forward);
+  pi.on("tool_execution_end", forward);
+  pi.on("agent_start", forward);
+  pi.on("agent_end", forward);
 }
 
 async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
@@ -72,8 +97,31 @@ function toRegistration(ctx: ExtensionCommandContext): unknown {
   };
 }
 
-function daemonSessionId(ctx: ExtensionCommandContext): string {
+function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string {
   return `sess_${ctx.sessionManager.getSessionId()}`;
+}
+
+async function pollRemoteCommands(pi: ExtensionAPI, ctx: ExtensionCommandContext, sessionId: string): Promise<void> {
+  const response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`);
+  if (!response.ok) return;
+  const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
+  for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command);
+}
+
+export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort">, command: RemoteTuiCommand): void {
+  if (command.type === "remote_prompt") {
+    pi.sendUserMessage(command.text, command.streamingBehavior ? { deliverAs: command.streamingBehavior } : undefined);
+    return;
+  }
+  if (command.type === "remote_abort") ctx.abort();
+}
+
+async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
+  await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/events`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event),
+  });
 }
 
 function daemonBaseUrl(): string {

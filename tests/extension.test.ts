@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import remoteControlExtension from "../src/extension/index.js";
+import remoteControlExtension, { handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
   name: string;
@@ -23,12 +23,18 @@ type ExecCall = { command: string; args: string[] };
 
 function createFakePi(execCalls: ExecCall[] = []) {
   const commands: Registered[] = [];
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionTestContext) => void>();
   return {
     commands,
+    handlers,
     pi: {
       registerCommand(name: string, options: Omit<Registered, "name">) {
         commands.push({ name, ...options });
       },
+      on(name: string, handler: (event: unknown, ctx: ExtensionTestContext) => void) {
+        handlers.set(name, handler);
+      },
+      sendUserMessage: vi.fn(),
       exec: async (command: string, args: string[]) => {
         execCalls.push({ command, args });
         return { stdout: "pi-remote-control is running (pid 1234)\n", stderr: "", code: 0, killed: false };
@@ -81,6 +87,8 @@ describe("remote control extension", () => {
       registerCommand(name: string, options: Omit<Registered, "name">) {
         commands.push({ name, ...options });
       },
+      on: vi.fn(),
+      sendUserMessage: vi.fn(),
       exec: async (command: string, args: string[]) => {
         execCalls.push({ command, args });
         if (args.includes("status")) return { stdout: "pi-remote-control is stopped\n", stderr: "", code: 1, killed: false };
@@ -131,6 +139,43 @@ describe("remote control extension", () => {
 
     expect(fetchCalls.at(-1)).toEqual({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1", init: { method: "DELETE" } });
     expect(notifications.at(-1)).toEqual({ message: "Remote control disabled for this session", type: "info" });
+  });
+
+  it("forwards TUI events while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("message_start")?.({ type: "message_start", message: { id: "msg_1", role: "user" } }, ctx);
+
+    expect(fetchCalls.at(-1)).toEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: { method: "POST", body: { type: "message_start", message: { id: "msg_1", role: "user" } } },
+    });
+  });
+
+  it("applies queued remote commands to the TUI runtime", () => {
+    const sendUserMessage = vi.fn();
+    const abort = vi.fn();
+    handleRemoteCommand({ sendUserMessage } as never, { abort } as never, {
+      type: "remote_prompt",
+      requestId: "req_1",
+      text: "hello",
+      streamingBehavior: "followUp",
+    });
+    handleRemoteCommand({ sendUserMessage } as never, { abort } as never, { type: "remote_abort", requestId: "req_2" });
+
+    expect(sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "followUp" });
+    expect(abort).toHaveBeenCalledOnce();
   });
 
   it("runs local pairing command from remote-control-pair", async () => {
