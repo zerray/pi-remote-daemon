@@ -2,6 +2,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { DaemonConfig } from "../types.js";
 
+export type RemoteSessionSummary = {
+  id: string;
+  piSessionId: string;
+  projectId: string;
+  name: string | null;
+  path: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export type SessionService = {
+  listProjectSessions(projectId: string): Promise<RemoteSessionSummary[]>;
+};
+
 export type DaemonServer = {
   address: string;
   close(): Promise<void>;
@@ -13,6 +27,7 @@ export type StartServerOptions = {
   piVersion?: string;
   daemonVersion?: string;
   authenticateToken?: (token: string) => boolean | Promise<boolean>;
+  sessionService?: SessionService;
 };
 
 export async function startDaemonServer(options: StartServerOptions): Promise<DaemonServer> {
@@ -60,6 +75,19 @@ async function handleHttpRequest(
     }
 
     writeJson(response, 200, { projects: options.config.allowedProjects });
+    return;
+  }
+
+  const projectSessionsMatch = request.url?.match(/^\/v1\/projects\/([^/]+)\/sessions$/);
+  if (request.method === "GET" && projectSessionsMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const projectId = decodeURIComponent(projectSessionsMatch[1] ?? "");
+    const sessions = await options.sessionService?.listProjectSessions(projectId);
+    writeJson(response, 200, { sessions: sessions ?? [] });
     return;
   }
 

@@ -64,4 +64,45 @@ describe("daemon HTTP server", () => {
       },
     );
   });
+
+  it("lists project sessions for authenticated devices", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          sessions: [
+            {
+              id: "sess_1",
+              piSessionId: "pi_1",
+              projectId: "proj_1",
+              name: "Work",
+              path: "/sessions/work.jsonl",
+              updatedAt: "2026-05-09T00:00:00.000Z",
+              messageCount: 2,
+            },
+          ],
+        });
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          listProjectSessions: async (projectId) => [
+            {
+              id: "sess_1",
+              piSessionId: "pi_1",
+              projectId,
+              name: "Work",
+              path: "/sessions/work.jsonl",
+              updatedAt: "2026-05-09T00:00:00.000Z",
+              messageCount: 2,
+            },
+          ],
+        },
+      },
+    );
+  });
 });
