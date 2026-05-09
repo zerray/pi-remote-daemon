@@ -34,4 +34,22 @@ describe("daemon CLI", () => {
     ]);
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });
+
+  it("reports stopped status when no pid file exists", async () => {
+    const lines: string[] = [];
+    const deps: CliDependencies = {
+      getStateDir: () => "/tmp/state",
+      readTextFile: async () => {
+        const error = new Error("missing") as Error & { code: string };
+        error.code = "ENOENT";
+        throw error;
+      },
+      writeLine: (line) => lines.push(line),
+    };
+
+    const code = await main(["status"], deps);
+
+    expect(code).toBe(1);
+    expect(lines).toEqual(["pi-remote-daemon is stopped"]);
+  });
 });

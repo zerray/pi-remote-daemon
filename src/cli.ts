@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
@@ -10,18 +12,21 @@ export type CliDependencies = {
   loadConfig?: (stateDir: string) => Promise<DaemonConfig>;
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
   waitForShutdown?: () => Promise<void>;
+  readTextFile?: (path: string) => Promise<string>;
+  isProcessRunning?: (pid: number) => boolean;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
 };
 
 export async function main(argv = process.argv.slice(2), deps: CliDependencies = {}): Promise<number> {
   const command = argv[0];
+  const env = deps.env ?? process.env;
+  if (command === "status") return statusCommand(argv.slice(1), deps, env);
   if (command !== "start") {
-    (deps.writeLine ?? console.log)("Usage: pi-remote-daemon start [--state-dir DIR] [--bind HOST:PORT]");
+    (deps.writeLine ?? console.log)("Usage: pi-remote-daemon start|stop|status|pair [options]");
     return command === "--help" || command === "-h" ? 0 : 1;
   }
 
-  const env = deps.env ?? process.env;
   const parsed = parseStartArgs(argv.slice(1));
   const stateDir = parsed.stateDir ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
   await (deps.ensureStateDir ?? ensureDaemonStateDir)(stateDir);
@@ -46,6 +51,41 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   await (deps.waitForShutdown ?? waitForInterrupt)();
   await server.close();
   return 0;
+}
+
+async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
+  const stateDir = parseStateDirArg(args) ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
+  const writeLine = deps.writeLine ?? console.log;
+  const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+
+  try {
+    const pid = Number.parseInt((await readTextFile(join(stateDir, "daemon.pid"))).trim(), 10);
+    const running = (deps.isProcessRunning ?? isProcessRunning)(pid);
+    writeLine(running ? `pi-remote-daemon is running (pid ${pid})` : "pi-remote-daemon is stopped");
+    return running ? 0 : 1;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      writeLine("pi-remote-daemon is stopped");
+      return 1;
+    }
+    throw error;
+  }
+}
+
+function parseStateDirArg(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--state-dir") return args[index + 1];
+  }
+  return undefined;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseStartArgs(args: string[]): { stateDir?: string; bindAddress?: string } {
