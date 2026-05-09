@@ -164,7 +164,7 @@ Server messages:
 
 ## Pi TUI extension ↔ daemon
 
-The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. It may be HTTP or WebSocket internally, but the logical messages are:
+The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. It uses the same bearer-token authentication as iOS endpoints for now. It may be HTTP or WebSocket internally, but the logical messages are:
 
 ### Pair code creation
 
@@ -207,16 +207,17 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 ### TUI-to-daemon events
 
-While active, the extension forwards normalized Pi events:
+While active, the extension forwards raw Pi extension events. The daemon broadcasts them to iOS WebSocket subscribers without normalization in the current MVP:
 
 ```json
-{ "type": "session_state", "session": { "id": "sess_..." }, "isStreaming": false }
-{ "type": "message_upsert", "message": { "id": "msg_...", "role": "assistant", "text": "..." } }
-{ "type": "assistant_delta", "messageId": "msg_...", "text": "..." }
-{ "type": "tool_status", "toolCallId": "call_...", "name": "bash", "status": "running" }
-{ "type": "queue_update", "pendingMessageCount": 0 }
-{ "type": "agent_done" }
-{ "type": "unregister_session" }
+{ "type": "message_start", "message": { "id": "msg_...", "role": "user" } }
+{ "type": "message_update", "message": { "id": "msg_..." }, "assistantMessageEvent": { "type": "text_delta", "text": "..." } }
+{ "type": "message_end", "message": { "id": "msg_...", "role": "assistant" } }
+{ "type": "tool_execution_start", "toolCallId": "call_...", "toolName": "bash", "args": {} }
+{ "type": "tool_execution_update", "toolCallId": "call_...", "toolName": "bash", "partialResult": {} }
+{ "type": "tool_execution_end", "toolCallId": "call_...", "toolName": "bash", "isError": false }
+{ "type": "agent_start" }
+{ "type": "agent_end", "messages": [] }
 ```
 
 ### Daemon-to-TUI commands
@@ -228,12 +229,7 @@ The daemon forwards iOS requests to the owning TUI extension:
 { "type": "remote_abort", "requestId": "req_..." }
 ```
 
-The extension acknowledges each command:
-
-```json
-{ "type": "command_ack", "requestId": "req_...", "accepted": true }
-{ "type": "command_ack", "requestId": "req_...", "accepted": false, "error": "not_idle" }
-```
+Command acknowledgements are not part of the current MVP protocol.
 
 ## Pi integration boundary
 
@@ -246,5 +242,4 @@ The daemon keeps Pi-specific event normalization inside the package. Pi SDK/RPC 
 | List remote sessions | Daemon active TUI session registry. |
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
-| Stream assistant text | Pi event → TUI extension → daemon → iOS WebSocket. |
-| Stream tool status | Pi event → TUI extension → daemon → iOS WebSocket. |
+| Stream events | Raw Pi event → TUI extension → daemon → iOS WebSocket. |
