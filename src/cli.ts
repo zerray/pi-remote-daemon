@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
+import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./config.js";
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
@@ -12,6 +12,7 @@ export type CliDependencies = {
   getStateDir?: (options?: { env?: NodeJS.ProcessEnv }) => string;
   ensureStateDir?: (stateDir: string) => Promise<void>;
   loadConfig?: (stateDir: string) => Promise<DaemonConfig>;
+  saveConfig?: (stateDir: string, config: DaemonConfig) => Promise<void>;
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
   openStore?: (stateDir: string) => DaemonStore;
   acquireLock?: (stateDir: string) => Promise<DaemonLock | undefined>;
@@ -47,9 +48,11 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     return 1;
   }
 
-  const loadedConfig = await (deps.loadConfig ?? loadDaemonConfig)(stateDir).catch((error) => {
+  const loadedConfig = await (deps.loadConfig ?? loadDaemonConfig)(stateDir).catch(async (error) => {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return defaultDaemonConfig();
+      const config = defaultDaemonConfig();
+      await (deps.saveConfig ?? saveDaemonConfig)(stateDir, config);
+      return config;
     }
     throw error;
   });

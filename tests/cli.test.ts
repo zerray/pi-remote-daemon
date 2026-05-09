@@ -55,6 +55,39 @@ describe("daemon CLI", () => {
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });
 
+  it("writes default config when config file is missing", async () => {
+    const calls: unknown[] = [];
+    const missing = new Error("missing") as Error & { code: string };
+    missing.code = "ENOENT";
+
+    const code = await main(["start"], {
+      getStateDir: () => "/tmp/state",
+      ensureStateDir: async () => undefined,
+      acquireLock: async () => ({ path: "/tmp/state/daemon.lock", release: async () => calls.push({ releaseLock: true }) }),
+      loadConfig: async () => {
+        throw missing;
+      },
+      saveConfig: async (stateDir, config) => calls.push({ saveConfig: stateDir, config }),
+      openStore: () => ({
+        close: () => calls.push({ closeStore: true }),
+        authenticateToken: async () => false,
+        createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+        claimPairingCode: async () => undefined,
+      }),
+      startServer: async () => ({ address: "127.0.0.1:9999", close: async () => undefined }),
+      writeTextFile: async () => undefined,
+      removeFile: async () => undefined,
+      waitForShutdown: async () => undefined,
+      writeLine: () => undefined,
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toContainEqual({
+      saveConfig: "/tmp/state",
+      config: { bindAddress: "127.0.0.1:17373", allowedProjects: [] },
+    });
+  });
+
   it("does not start when daemon lock is already held", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
