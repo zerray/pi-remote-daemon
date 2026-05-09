@@ -123,6 +123,10 @@ async function handleHttpRequest(
   }
 
   if (request.method === "POST" && request.url === "/v1/tui/sessions") {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
     const body = (await readJsonBody(request)) as Parameters<ActiveSessionRegistry["registerSession"]>[0];
     const session = options.activeSessions?.registerSession(body);
     writeJson(response, session ? 200 : 503, session ? { session } : { error: "active_sessions_unavailable" });
@@ -131,6 +135,10 @@ async function handleHttpRequest(
 
   const tuiSessionMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
   if (request.method === "DELETE" && tuiSessionMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
     const sessionId = decodeURIComponent(tuiSessionMatch[1] ?? "");
     const unregistered = options.activeSessions?.unregisterSession(sessionId) ?? false;
     streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "session_closed" }));
@@ -141,6 +149,10 @@ async function handleHttpRequest(
 
   const tuiCommandsMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
   if (request.method === "GET" && tuiCommandsMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
     const sessionId = decodeURIComponent(tuiCommandsMatch[1] ?? "");
     writeJson(response, 200, { commands: options.activeSessions?.takeCommands(sessionId) ?? [] });
     return;
@@ -148,6 +160,10 @@ async function handleHttpRequest(
 
   const tuiEventMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
   if (request.method === "POST" && tuiEventMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
     const sessionId = decodeURIComponent(tuiEventMatch[1] ?? "");
     const event = await readJsonBody(request);
     streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));

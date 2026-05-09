@@ -55,7 +55,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       try {
         response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: await tuiHeaders(),
           body: JSON.stringify(toRegistration(ctx)),
         });
       } catch (error) {
@@ -120,7 +120,10 @@ function clearRemoteControlStatus(ctx: ExtensionContext): void {
 }
 
 async function unregisterTuiSession(sessionId: string): Promise<void> {
-  await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    headers: await tuiHeaders(false),
+  });
 }
 
 async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
@@ -172,7 +175,9 @@ function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string 
 }
 
 async function pollRemoteCommands(pi: ExtensionAPI, ctx: ExtensionCommandContext, sessionId: string): Promise<void> {
-  const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`);
+  const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`, {
+    headers: await tuiHeaders(false),
+  });
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
   for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command);
@@ -189,7 +194,7 @@ export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, c
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
   await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/events`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: await tuiHeaders(),
     body: JSON.stringify(event),
   });
 }
@@ -211,6 +216,13 @@ function bindAddressToBaseUrl(bindAddress: string): string {
   const host = bindAddress.slice(0, index);
   const port = bindAddress.slice(index + 1);
   return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+}
+
+async function tuiHeaders(includeContentType = true): Promise<Record<string, string>> {
+  const headers: Record<string, string> = includeContentType ? { "content-type": "application/json" } : {};
+  const token = process.env.PI_REMOTE_CONTROL_DEV_TOKEN;
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
 }
 
 function cliCommand(): { command: string; args: string[] } {

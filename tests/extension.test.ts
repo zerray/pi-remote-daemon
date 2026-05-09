@@ -80,6 +80,7 @@ function createContext() {
 
 beforeEach(() => {
   vi.stubEnv("PI_REMOTE_CONTROL_LOCAL_URL", "http://127.0.0.1:17373");
+  vi.stubEnv("PI_REMOTE_CONTROL_DEV_TOKEN", "test-token");
 });
 
 afterEach(() => {

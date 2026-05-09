@@ -54,9 +54,12 @@ describe("daemon HTTP server", () => {
 
     await withServer(
       async (baseUrl) => {
+        const unauthorized = await fetch(`${baseUrl}/v1/tui/sessions`, { method: "POST" });
+        expect(unauthorized.status).toBe(401);
+
         const registerResponse = await fetch(`${baseUrl}/v1/tui/sessions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
           body: JSON.stringify({
             id: "sess_1",
             piSessionId: "pi_1",
@@ -72,12 +75,15 @@ describe("daemon HTTP server", () => {
         await expect(registerResponse.json()).resolves.toMatchObject({ session: { id: "sess_1", projectId: "proj_1" } });
         expect(activeSessions.listProjects()).toEqual([{ id: "proj_1", name: "Example", path: "/repo/example" }]);
 
-        const unregisterResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1`, { method: "DELETE" });
+        const unregisterResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1`, {
+          method: "DELETE",
+          headers: { authorization: "Bearer test-token" },
+        });
         expect(unregisterResponse.status).toBe(200);
         await expect(unregisterResponse.json()).resolves.toEqual({ unregistered: true });
         expect(activeSessions.listProjects()).toEqual([]);
       },
-      { activeSessions },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
   });
 
@@ -107,7 +113,7 @@ describe("daemon HTTP server", () => {
         const event = { type: "assistant_delta", messageId: "msg_1", text: "hello" };
         const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
           body: JSON.stringify(event),
         });
         expect(response.status).toBe(200);
@@ -287,14 +293,18 @@ describe("daemon HTTP server", () => {
 
     await withServer(
       async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`);
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`, {
+          headers: { authorization: "Bearer test-token" },
+        });
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ commands: [{ type: "remote_abort", requestId: "req_1" }] });
 
-        const emptyResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`);
+        const emptyResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`, {
+          headers: { authorization: "Bearer test-token" },
+        });
         await expect(emptyResponse.json()).resolves.toEqual({ commands: [] });
       },
-      { activeSessions },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
   });
 
