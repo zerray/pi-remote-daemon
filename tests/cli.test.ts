@@ -15,6 +15,12 @@ describe("daemon CLI", () => {
         calls.push({ startServer: options });
         return { address: "127.0.0.1:9999", close: async () => undefined };
       },
+      openStore: () => ({
+        close: () => undefined,
+        authenticateToken: async () => false,
+        createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+        claimPairingCode: async () => undefined,
+      }),
       waitForShutdown: async () => undefined,
       writeTextFile: async (path, content) => {
         calls.push({ writeTextFile: path, content });
