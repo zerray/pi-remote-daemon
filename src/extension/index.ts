@@ -165,6 +165,7 @@ function toRegistration(ctx: ExtensionCommandContext): unknown {
     name: ctx.sessionManager.getSessionName(),
     pid: process.pid,
     messageCount: ctx.sessionManager.getEntries().length,
+    entries: ctx.sessionManager.getEntries(),
     isStreaming: !ctx.isIdle(),
     updatedAt: new Date().toISOString(),
   };

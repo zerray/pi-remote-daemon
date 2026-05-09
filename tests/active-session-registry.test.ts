@@ -65,11 +65,18 @@ describe("active TUI session registry", () => {
       messageCount: 0,
       isStreaming: true,
       updatedAt: "2026-05-09T00:00:00.000Z",
+      entries: [
+        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } },
+        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
+      ],
     });
 
     expect(registry.getSessionState("sess_1")).toMatchObject({
       session: { id: "sess_1", projectId: "proj_1", isActive: true },
-      messages: [],
+      messages: [
+        { id: "msg_1", role: "user", text: "hello", createdAt: "2026-05-09T00:00:00.000Z", isStreaming: false },
+        { id: "msg_2", role: "assistant", text: "hi", createdAt: "2026-05-09T00:00:01.000Z", isStreaming: false },
+      ],
       tools: [],
       isStreaming: true,
       pendingMessageCount: 0,

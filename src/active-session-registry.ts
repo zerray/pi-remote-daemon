@@ -16,6 +16,7 @@ export type ActiveSessionRegistration = {
   messageCount: number;
   isStreaming: boolean;
   updatedAt: string;
+  entries?: unknown[];
 };
 
 export type ActiveSessionSummary = {
@@ -74,7 +75,7 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
   return {
     registerSession(session) {
       const summary = toSummary(session);
-      sessions.set(session.id, { ...session, summary, messages: [], tools: [], pendingMessageCount: 0, commands: [] });
+      sessions.set(session.id, { ...session, summary, messages: messagesFromEntries(session.entries ?? []), tools: [], pendingMessageCount: 0, commands: [] });
       return summary;
     },
 
@@ -122,6 +123,44 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
       return commands;
     },
   };
+}
+
+function messagesFromEntries(entries: unknown[]): ChatMessage[] {
+  return entries.flatMap((entry) => {
+    const record = asRecord(entry);
+    if (record.type !== "message") return [];
+    const message = asRecord(record.message);
+    const role = messageRole(message.role);
+    if (!role) return [];
+    return [{
+      id: readString(record.id) ?? `msg_${Math.random().toString(36).slice(2, 10)}`,
+      role,
+      text: messageText(message.content),
+      createdAt: readString(record.timestamp) ?? new Date().toISOString(),
+      isStreaming: false,
+    }];
+  });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function messageRole(value: unknown): ChatMessage["role"] | undefined {
+  return value === "user" || value === "assistant" || value === "toolResult" || value === "system" ? value : undefined;
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((item) => {
+    const record = asRecord(item);
+    return readString(record.text) ?? "";
+  }).join("");
 }
 
 function toSummary(session: ActiveSessionRegistration): ActiveSessionSummary {
