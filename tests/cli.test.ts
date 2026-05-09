@@ -268,6 +268,27 @@ describe("daemon CLI", () => {
     expect(lines).toEqual(["pi-remote-control stop requested (pid 1234)"]);
   });
 
+  it("prints a helpful pairing setup message when advertisedBaseUrl is missing", async () => {
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const code = await main(["pair", "--state-dir", "/tmp/state"], {
+      ensureStateDir: async (stateDir) => calls.push({ ensureStateDir: stateDir }),
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:17373" }),
+      openStore: () => {
+        throw new Error("store should not open without advertisedBaseUrl");
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(calls).toEqual([{ ensureStateDir: "/tmp/state" }]);
+    expect(lines).toEqual([
+      "advertisedBaseUrl is required for QR pairing.",
+      "Set ~/.pi/remote-control/config.json or PI_REMOTE_CONTROL_ADVERTISED_BASE_URL to an iOS-reachable URL.",
+      "Example: https://macbook.tailnet.ts.net:17373",
+    ]);
+  });
+
   it("creates and prints a local TUI pairing link", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];

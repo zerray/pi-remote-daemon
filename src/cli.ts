@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createActiveSessionRegistry } from "./active-session-registry.js";
 import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./config.js";
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
-import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
+import type { DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { buildPairingLink } from "./pairing-link.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
@@ -16,14 +16,13 @@ export type CliDependencies = {
   loadConfig?: (stateDir: string) => Promise<DaemonConfig>;
   saveConfig?: (stateDir: string, config: DaemonConfig) => Promise<void>;
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
-  openStore?: (stateDir: string) => DaemonStore;
+  openStore?: (stateDir: string) => DaemonStore | Promise<DaemonStore>;
   acquireLock?: (stateDir: string) => Promise<DaemonLock | undefined>;
   waitForShutdown?: () => Promise<void>;
   readTextFile?: (path: string) => Promise<string>;
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
-  fetchJson?: (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<unknown>;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
 };
@@ -60,7 +59,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   await (deps.saveConfig ?? saveDaemonConfig)(stateDir, loadedConfig);
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
   const devToken = env.PI_REMOTE_CONTROL_DEV_TOKEN;
-  const store = (deps.openStore ?? openDaemonStore)(stateDir);
+  const store = await (deps.openStore ?? openStore)(stateDir);
   const server = await (deps.startServer ?? startDaemonServer)({
     stateDir,
     config,
@@ -90,11 +89,19 @@ async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
   const stateDir = parseStateDirArg(args) ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
   await (deps.ensureStateDir ?? ensureDaemonStateDir)(stateDir);
   const config = await (deps.loadConfig ?? loadDaemonConfig)(stateDir);
-  const store = (deps.openStore ?? openDaemonStore)(stateDir);
+  const advertisedBaseUrl = parseAdvertisedBaseUrlArg(args) ?? env.PI_REMOTE_CONTROL_ADVERTISED_BASE_URL ?? config.advertisedBaseUrl;
+  if (!advertisedBaseUrl) {
+    writeLine("advertisedBaseUrl is required for QR pairing.");
+    writeLine("Set ~/.pi/remote-control/config.json or PI_REMOTE_CONTROL_ADVERTISED_BASE_URL to an iOS-reachable URL.");
+    writeLine("Example: https://macbook.tailnet.ts.net:17373");
+    return 1;
+  }
+
+  const store = await (deps.openStore ?? openStore)(stateDir);
   try {
     const result = await store.createPairingCode(new Date(), 5 * 60_000);
     const pairingLink = buildPairingLink({
-      advertisedBaseUrl: config.advertisedBaseUrl,
+      advertisedBaseUrl,
       pairCode: result.pairCode,
       expiresAt: result.expiresAt,
     });
@@ -152,17 +159,16 @@ async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.
   }
 }
 
-function parseBaseUrlArg(args: string[]): string | undefined {
+function parseAdvertisedBaseUrlArg(args: string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--base-url") return args[index + 1];
+    if (args[index] === "--advertised-base-url") return args[index + 1];
   }
   return undefined;
 }
 
-async function fetchJson(url: string, init?: { method?: string; headers?: Record<string, string> }): Promise<unknown> {
-  const response = await fetch(url, init);
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
-  return response.json();
+async function openStore(stateDir: string): Promise<DaemonStore> {
+  const { openDaemonStore } = await import("./persistence/daemon-store.js");
+  return openDaemonStore(stateDir);
 }
 
 function parseStateDirArg(args: string[]): string | undefined {
