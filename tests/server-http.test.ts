@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { startDaemonServer } from "../src/server/http.js";
+import { startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
-async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
+async function withServer<T>(
+  fn: (baseUrl: string) => Promise<T>,
+  overrides: Partial<StartServerOptions> = {},
+): Promise<T> {
   const server = await startDaemonServer({
     stateDir: "/tmp/pi-remote-daemon-test",
     config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
     piVersion: "pi-test",
     daemonVersion: "daemon-test",
+    ...overrides,
   });
 
   try {
@@ -37,5 +41,27 @@ describe("daemon HTTP server", () => {
       expect(response.status).toBe(401);
       await expect(response.json()).resolves.toEqual({ error: "unauthorized" });
     });
+  });
+
+  it("lists configured projects for authenticated devices", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/projects`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          projects: [{ id: "proj_1", name: "Example", path: "/repo/example" }],
+        });
+      },
+      {
+        config: {
+          bindAddress: "127.0.0.1:0",
+          allowedProjects: [{ id: "proj_1", name: "Example", path: "/repo/example" }],
+        },
+        authenticateToken: (token) => token === "test-token",
+      },
+    );
   });
 });

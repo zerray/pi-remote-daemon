@@ -59,7 +59,7 @@ async function handleHttpRequest(
       return;
     }
 
-    writeJson(response, 501, { error: "not_implemented" });
+    writeJson(response, 200, { projects: options.config.allowedProjects });
     return;
   }
 
