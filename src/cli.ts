@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { canClaimPairingCode, createPairingCode } from "./auth/pairing.js";
+import { issueDeviceToken } from "./auth/tokens.js";
 import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
@@ -45,10 +47,24 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   });
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
   const devToken = env.PI_REMOTE_DAEMON_DEV_TOKEN;
+  let currentPairingCode: ReturnType<typeof createPairingCode> | undefined;
   const server = await (deps.startServer ?? startDaemonServer)({
     stateDir,
     config,
     authenticateToken: devToken ? (token) => token === devToken : undefined,
+    pairService: {
+      async createPairingCode() {
+        currentPairingCode = createPairingCode(new Date(), 5 * 60_000);
+        return { pairCode: currentPairingCode.rawCode, expiresAt: currentPairingCode.expiresAt };
+      },
+      async claimPairingCode(request) {
+        if (!currentPairingCode || !canClaimPairingCode(currentPairingCode, request.pairCode, new Date())) {
+          throw new Error("Invalid or expired pairing code");
+        }
+        const token = issueDeviceToken();
+        return { deviceId: `dev_${Date.now().toString(36)}`, token: token.rawToken, daemonName: "pi-remote-daemon" };
+      },
+    },
   });
   const pidFile = join(stateDir, "daemon.pid");
   await (deps.writeTextFile ?? writeFile)(pidFile, `${process.pid}\n`);
