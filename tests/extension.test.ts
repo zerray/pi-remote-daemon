@@ -19,7 +19,10 @@ type ExtensionTestContext = {
     getEntries(): unknown[];
   };
   isIdle(): boolean;
-  ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
+  ui: {
+    notify(message: string, type?: "info" | "warning" | "error"): void;
+    setStatus(key: string, text: string | undefined): void;
+  };
 };
 
 type ExecCall = { command: string; args: string[] };
@@ -48,7 +51,9 @@ function createFakePi(execCalls: ExecCall[] = []) {
 
 function createContext() {
   const notifications: Array<{ message: string; type?: "info" | "warning" | "error" }> = [];
+  const statuses: Array<{ key: string; text: string | undefined }> = [];
   return {
+    statuses,
     notifications,
     ctx: {
       cwd: "/repo/example",
@@ -62,6 +67,9 @@ function createContext() {
       ui: {
         notify(message: string, type?: "info" | "warning" | "error") {
           notifications.push({ message, type });
+        },
+        setStatus(key: string, text: string | undefined) {
+          statuses.push({ key, text });
         },
       },
     },
@@ -200,6 +208,57 @@ describe("remote control extension", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("updates TUI status when toggling remote control", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx, statuses } = createContext();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
+    );
+    remoteControlExtension(pi as never);
+    const command = commands.find((registered) => registered.name === "remote-control")!;
+
+    await command.handler("", ctx);
+    await command.handler("", ctx);
+
+    expect(statuses).toEqual([
+      { key: "remote-control", text: "Remote Control Active" },
+      { key: "remote-control", text: undefined },
+    ]);
+  });
+
+  it("clears active status and unregisters on session shutdown", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx, statuses } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method } });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+    await vi.waitFor(() => expect(fetchCalls.at(-1)).toEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1",
+      init: { method: "DELETE" },
+    }));
+    expect(statuses.at(-1)).toEqual({ key: "remote-control", text: undefined });
+  });
+
+  it("clears status on session start", () => {
+    const { pi, handlers } = createFakePi();
+    const { ctx, statuses } = createContext();
+    remoteControlExtension(pi as never);
+
+    handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
+
+    expect(statuses).toEqual([{ key: "remote-control", text: undefined }]);
   });
 
   it("toggles off an already registered TUI session", async () => {
