@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./config.js";
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
@@ -18,7 +18,6 @@ export type CliDependencies = {
   acquireLock?: (stateDir: string) => Promise<DaemonLock | undefined>;
   waitForShutdown?: () => Promise<void>;
   readTextFile?: (path: string) => Promise<string>;
-  writeTextFile?: (path: string, content: string) => Promise<void>;
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
@@ -73,16 +72,12 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
       },
     },
   });
-  const pidFile = join(stateDir, "daemon.pid");
-  await (deps.writeTextFile ?? writeFile)(pidFile, `${process.pid}\n`);
-
   (deps.writeLine ?? console.log)(`pi-remote-daemon listening on http://${server.address}`);
   if (devToken) (deps.writeLine ?? console.log)("dev token authentication is enabled");
 
   await (deps.waitForShutdown ?? waitForInterrupt)();
   await server.close();
   store.close();
-  await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
   await lock.release();
   return 0;
 }
@@ -105,11 +100,11 @@ async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
   const writeLine = deps.writeLine ?? console.log;
   const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
 
-  const pidFile = join(stateDir, "daemon.pid");
+  const lockFile = join(stateDir, "daemon.lock");
   try {
-    const pid = Number.parseInt((await readTextFile(pidFile)).trim(), 10);
+    const pid = Number.parseInt((await readTextFile(lockFile)).trim(), 10);
     (deps.sendSignal ?? process.kill)(pid, "SIGTERM");
-    await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
+    await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(lockFile);
     writeLine(`pi-remote-daemon stop requested (pid ${pid})`);
     return 0;
   } catch (error) {
@@ -127,7 +122,7 @@ async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.
   const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
 
   try {
-    const pid = Number.parseInt((await readTextFile(join(stateDir, "daemon.pid"))).trim(), 10);
+    const pid = Number.parseInt((await readTextFile(join(stateDir, "daemon.lock"))).trim(), 10);
     const running = (deps.isProcessRunning ?? isProcessRunning)(pid);
     writeLine(running ? `pi-remote-daemon is running (pid ${pid})` : "pi-remote-daemon is stopped");
     return running ? 0 : 1;

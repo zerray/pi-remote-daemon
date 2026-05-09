@@ -32,9 +32,6 @@ describe("daemon CLI", () => {
         claimPairingCode: async () => undefined,
       }),
       waitForShutdown: async () => undefined,
-      writeTextFile: async (path, content) => {
-        calls.push({ writeTextFile: path, content });
-      },
       removeFile: async (path) => {
         calls.push({ removeFile: path });
       },
@@ -55,8 +52,6 @@ describe("daemon CLI", () => {
           config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
         }),
       },
-      { writeTextFile: "/tmp/state/daemon.pid", content: `${process.pid}\n` },
-      { removeFile: "/tmp/state/daemon.pid" },
       { releaseLock: true },
     ]);
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
@@ -104,7 +99,6 @@ describe("daemon CLI", () => {
         claimPairingCode: async () => undefined,
       }),
       startServer: async () => ({ address: "127.0.0.1:9999", close: async () => undefined }),
-      writeTextFile: async () => undefined,
       removeFile: async () => undefined,
       waitForShutdown: async () => undefined,
       writeLine: () => undefined,
@@ -164,7 +158,6 @@ describe("daemon CLI", () => {
         startOptions = options;
         return { address: "127.0.0.1:9999", close: async () => undefined };
       },
-      writeTextFile: async () => undefined,
       removeFile: async () => undefined,
       waitForShutdown: async () => undefined,
       writeLine: () => undefined,
@@ -186,7 +179,7 @@ describe("daemon CLI", () => {
   });
 
 
-  it("reports stopped status when no pid file exists", async () => {
+  it("reports stopped status when no lock file exists", async () => {
     const lines: string[] = [];
     const deps: CliDependencies = {
       getStateDir: () => "/tmp/state",
@@ -204,11 +197,11 @@ describe("daemon CLI", () => {
     expect(lines).toEqual(["pi-remote-daemon is stopped"]);
   });
 
-  it("reports running status from pid file", async () => {
+  it("reports running status from lock file", async () => {
     const lines: string[] = [];
     const code = await main(["status", "--state-dir", "/tmp/state"], {
       readTextFile: async (path) => {
-        expect(path).toBe("/tmp/state/daemon.pid");
+        expect(path).toBe("/tmp/state/daemon.lock");
         return "1234\n";
       },
       isProcessRunning: (pid) => pid === 1234,
@@ -219,7 +212,7 @@ describe("daemon CLI", () => {
     expect(lines).toEqual(["pi-remote-daemon is running (pid 1234)"]);
   });
 
-  it("reports stopped when stopping without a pid file", async () => {
+  it("reports stopped when stopping without a lock file", async () => {
     const lines: string[] = [];
     const code = await main(["stop", "--state-dir", "/tmp/state"], {
       readTextFile: async () => {
@@ -234,7 +227,7 @@ describe("daemon CLI", () => {
     expect(lines).toEqual(["pi-remote-daemon is not running"]);
   });
 
-  it("stops a running daemon from its pid file", async () => {
+  it("stops a running daemon from its lock file", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
     const code = await main(["stop", "--state-dir", "/tmp/state"], {
@@ -251,7 +244,7 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(calls).toEqual([
       { sendSignal: 1234, signal: "SIGTERM" },
-      { removeFile: "/tmp/state/daemon.pid" },
+      { removeFile: "/tmp/state/daemon.lock" },
     ]);
     expect(lines).toEqual(["pi-remote-daemon stop requested (pid 1234)"]);
   });
