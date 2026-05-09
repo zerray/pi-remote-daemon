@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import remoteControlExtension, { handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
@@ -65,8 +68,13 @@ function createContext() {
   };
 }
 
+beforeEach(() => {
+  vi.stubEnv("PI_REMOTE_CONTROL_LOCAL_URL", "http://127.0.0.1:17373");
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("remote control extension", () => {
@@ -170,20 +178,28 @@ describe("remote control extension", () => {
     expect(notifications.at(-1)).toEqual({ message: "Remote control enable failed: fetch failed", type: "error" });
   });
 
-  it("uses localhost for TUI control even when PI_REMOTE_CONTROL_URL is advertised for pairing", async () => {
-    const { pi, commands } = createFakePi();
-    const { ctx } = createContext();
-    const urls: string[] = [];
-    vi.stubEnv("PI_REMOTE_CONTROL_URL", "https://macbook.tailnet.ts.net:17373");
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      urls.push(url);
-      return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
-    }));
-    remoteControlExtension(pi as never);
+  it("uses configured bind address for TUI control when no local override is set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-extension-"));
+    try {
+      await writeFile(join(root, "config.json"), JSON.stringify({ bindAddress: "100.86.12.34:17373" }));
+      vi.unstubAllEnvs();
+      vi.stubEnv("PI_REMOTE_CONTROL_DIR", root);
+      vi.stubEnv("PI_REMOTE_CONTROL_URL", "https://macbook.tailnet.ts.net:17373");
+      const { pi, commands } = createFakePi();
+      const { ctx } = createContext();
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        urls.push(url);
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }));
+      remoteControlExtension(pi as never);
 
-    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+      await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-    expect(urls.at(-1)).toBe("http://127.0.0.1:17373/v1/tui/sessions");
+      expect(urls.at(-1)).toBe("http://100.86.12.34:17373/v1/tui/sessions");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("toggles off an already registered TUI session", async () => {
@@ -222,6 +238,7 @@ describe("remote control extension", () => {
     await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
     handlers.get("message_start")?.({ type: "message_start", message: { id: "msg_1", role: "user" } }, ctx);
+    await vi.waitFor(() => expect(fetchCalls.at(-1)).toMatchObject({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" }));
 
     expect(fetchCalls.at(-1)).toEqual({
       url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",

@@ -3,6 +3,8 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
+import { loadDaemonConfig } from "../config.js";
+import { getDaemonStateDir } from "../paths.js";
 import { projectIdForPath } from "../session-index.js";
 
 export default function remoteControlExtension(pi: ExtensionAPI): void {
@@ -27,7 +29,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       const sessionId = daemonSessionId(ctx);
       if (activeSessionIds.has(sessionId)) {
         try {
-          await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+          await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
         } catch (error) {
           ctx.ui.notify(`Remote control disable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
           return;
@@ -41,7 +43,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
 
       let response: Response;
       try {
-        response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
+        response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(toRegistration(ctx)),
@@ -105,7 +107,7 @@ async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
 async function waitForDaemonReady(attempts = Number.parseInt(process.env.PI_REMOTE_CONTROL_READY_ATTEMPTS ?? "100", 10), delayMs = 100): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const response = await fetch(`${daemonBaseUrl()}/v1/health`);
+      const response = await fetch(`${await daemonBaseUrl()}/v1/health`);
       if (response.ok) return;
     } catch {
       // The daemon may not have bound its HTTP port yet.
@@ -141,7 +143,7 @@ function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string 
 }
 
 async function pollRemoteCommands(pi: ExtensionAPI, ctx: ExtensionCommandContext, sessionId: string): Promise<void> {
-  const response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`);
+  const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`);
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
   for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command);
@@ -156,15 +158,30 @@ export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, c
 }
 
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
-  await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/events`, {
+  await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/events`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(event),
   });
 }
 
-function daemonBaseUrl(): string {
-  return process.env.PI_REMOTE_CONTROL_LOCAL_URL ?? "http://127.0.0.1:17373";
+async function daemonBaseUrl(): Promise<string> {
+  if (process.env.PI_REMOTE_CONTROL_LOCAL_URL) return process.env.PI_REMOTE_CONTROL_LOCAL_URL;
+
+  try {
+    const config = await loadDaemonConfig(getDaemonStateDir());
+    return bindAddressToBaseUrl(config.bindAddress);
+  } catch {
+    return "http://127.0.0.1:17373";
+  }
+}
+
+function bindAddressToBaseUrl(bindAddress: string): string {
+  const index = bindAddress.lastIndexOf(":");
+  if (index === -1) return `http://${bindAddress}`;
+  const host = bindAddress.slice(0, index);
+  const port = bindAddress.slice(index + 1);
+  return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
 }
 
 function cliCommand(): { command: string; args: string[] } {
