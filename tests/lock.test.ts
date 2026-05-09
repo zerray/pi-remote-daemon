@@ -19,4 +19,18 @@ describe("daemon lock", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("returns undefined when daemon.lock already exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-lock-"));
+    try {
+      const first = await acquireDaemonLock(root, 1234);
+      const second = await acquireDaemonLock(root, 5678);
+
+      expect(second).toBeUndefined();
+      await expect(readFile(join(root, "daemon.lock"), "utf8")).resolves.toBe("1234\n");
+      await first!.release();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
