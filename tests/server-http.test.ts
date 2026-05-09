@@ -234,4 +234,31 @@ describe("daemon HTTP server", () => {
       },
     );
   });
+
+  it("claims pairing codes without bearer auth", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/pair/claim`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pairCode: "123456", deviceName: "iPhone" }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          deviceId: "dev_1",
+          token: "prd_token",
+          daemonName: "test-daemon",
+        });
+      },
+      {
+        pairService: {
+          claimPairingCode: async (request) => {
+            expect(request).toEqual({ pairCode: "123456", deviceName: "iPhone" });
+            return { deviceId: "dev_1", token: "prd_token", daemonName: "test-daemon" };
+          },
+        },
+      },
+    );
+  });
 });

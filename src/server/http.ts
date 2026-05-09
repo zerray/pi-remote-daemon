@@ -38,6 +38,21 @@ export type DaemonServer = {
   close(): Promise<void>;
 };
 
+export type PairClaimRequest = {
+  pairCode: string;
+  deviceName: string;
+};
+
+export type PairClaimResponse = {
+  deviceId: string;
+  token: string;
+  daemonName: string;
+};
+
+export type PairService = {
+  claimPairingCode(request: PairClaimRequest): Promise<PairClaimResponse>;
+};
+
 export type StartServerOptions = {
   stateDir: string;
   config: DaemonConfig;
@@ -45,6 +60,7 @@ export type StartServerOptions = {
   daemonVersion?: string;
   authenticateToken?: (token: string) => boolean | Promise<boolean>;
   sessionService?: SessionService;
+  pairService?: PairService;
 };
 
 export async function startDaemonServer(options: StartServerOptions): Promise<DaemonServer> {
@@ -82,6 +98,13 @@ async function handleHttpRequest(
       piVersion: options.piVersion ?? "unknown",
       daemonVersion: options.daemonVersion ?? "0.1.0",
     });
+    return;
+  }
+
+  if (request.method === "POST" && request.url === "/v1/pair/claim") {
+    const body = (await readJsonBody(request)) as PairClaimRequest;
+    const result = await options.pairService?.claimPairingCode(body);
+    writeJson(response, 200, result ?? { error: "pairing_unavailable" });
     return;
   }
 
