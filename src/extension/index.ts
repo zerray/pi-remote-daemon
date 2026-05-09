@@ -67,7 +67,6 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         return;
       }
       activeSessionIds.add(sessionId);
-      void postSessionSnapshot(sessionId, ctx.sessionManager.getEntries()).catch(() => undefined);
       setRemoteControlStatus(ctx);
       const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId).catch(() => undefined), 1000);
       timer.unref?.();
@@ -191,14 +190,6 @@ export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, c
     return;
   }
   if (command.type === "remote_abort") ctx.abort();
-}
-
-async function postSessionSnapshot(sessionId: string, entries: unknown[]): Promise<void> {
-  await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/snapshot`, {
-    method: "POST",
-    headers: await tuiHeaders(),
-    body: JSON.stringify({ entries }),
-  });
 }
 
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {

@@ -53,7 +53,6 @@ export type ActiveSessionState = {
 
 export type ActiveSessionRegistry = {
   registerSession(session: ActiveSessionRegistration): ActiveSessionSummary;
-  replaceSessionMessages(sessionId: string, entries: unknown[]): boolean;
   unregisterSession(sessionId: string): boolean;
   listProjects(): ActiveProject[];
   listProjectSessions(projectId: string): ActiveSessionSummary[];
@@ -78,13 +77,6 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
       const summary = toSummary(session);
       sessions.set(session.id, { ...session, summary, messages: messagesFromEntries(session.entries ?? []), tools: [], pendingMessageCount: 0, commands: [] });
       return summary;
-    },
-
-    replaceSessionMessages(sessionId, entries) {
-      const session = sessions.get(sessionId);
-      if (!session) return false;
-      session.messages = messagesFromEntries(entries);
-      return true;
     },
 
     unregisterSession(sessionId) {

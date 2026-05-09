@@ -147,19 +147,6 @@ async function handleHttpRequest(
     return;
   }
 
-  const tuiSnapshotMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/snapshot$/);
-  if (request.method === "POST" && tuiSnapshotMatch) {
-    if (!(await isAuthorized(request, options))) {
-      writeJson(response, 401, { error: "unauthorized" });
-      return;
-    }
-    const sessionId = decodeURIComponent(tuiSnapshotMatch[1] ?? "");
-    const body = (await readJsonBody(request)) as { entries?: unknown[] };
-    const accepted = options.activeSessions?.replaceSessionMessages(sessionId, body.entries ?? []) ?? false;
-    writeJson(response, accepted ? 200 : 404, accepted ? { accepted: true } : { error: "session_not_found" });
-    return;
-  }
-
   const tuiCommandsMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
   if (request.method === "GET" && tuiCommandsMatch) {
     if (!(await isAuthorized(request, options))) {
