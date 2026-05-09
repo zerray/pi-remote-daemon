@@ -8,8 +8,16 @@ export default function remoteDaemonExtension(pi: ExtensionAPI): void {
     description: "Control the Pi remote daemon",
     handler: async (args, ctx) => {
       const commandArgs = splitArgs(args.trim() || "status");
+      const cli = cliCommand();
       if (commandArgs[0] === "start") {
-        const shellLine = `${shellQuote(cliCommand().command)} ${[...cliCommand().args, ...commandArgs]
+        const status = await pi.exec(cli.command, [...cli.args, "status"]);
+        const statusOutput = status.stdout.trim();
+        if (status.code === 0) {
+          ctx.ui.notify(statusOutput || "pi-remote-daemon is already running", "warning");
+          return;
+        }
+
+        const shellLine = `${shellQuote(cli.command)} ${[...cli.args, ...commandArgs]
           .map(shellQuote)
           .join(" ")} >/tmp/pi-remote-daemon.log 2>&1 &`;
         await pi.exec("sh", ["-lc", shellLine]);
@@ -17,7 +25,6 @@ export default function remoteDaemonExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const cli = cliCommand();
       const result = await pi.exec(cli.command, [...cli.args, ...commandArgs]);
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();

@@ -78,6 +78,31 @@ describe("remote daemon extension", () => {
     expect(notifications).toEqual([{ message: "pi-remote-daemon start requested", type: "info" }]);
   });
 
+  it("does not start daemon when status says it is already running", async () => {
+    const commands: Registered[] = [];
+    const execCalls: ExecCall[] = [];
+    const notifications: Array<{ message: string; type?: "info" | "warning" | "error" }> = [];
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      exec: async (command: string, args: string[]) => {
+        execCalls.push({ command, args });
+        return { stdout: "pi-remote-daemon is running (pid 1234)\n", stderr: "", code: 0, killed: false };
+      },
+    };
+    remoteDaemonExtension(pi as never);
+
+    await commands[0]!.handler("start --bind 127.0.0.1:17373", {
+      ui: { notify: (message, type) => notifications.push({ message, type }) },
+    });
+
+    expect(execCalls).toEqual([
+      { command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] },
+    ]);
+    expect(notifications).toEqual([{ message: "pi-remote-daemon is running (pid 1234)", type: "warning" }]);
+  });
+
   it("shows daemon CLI failures as errors", async () => {
     const commands: Registered[] = [];
     const notifications: Array<{ message: string; type?: "info" | "warning" | "error" }> = [];
