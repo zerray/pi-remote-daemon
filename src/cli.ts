@@ -89,7 +89,7 @@ async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
   const stateDir = parseStateDirArg(args) ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
   await (deps.ensureStateDir ?? ensureDaemonStateDir)(stateDir);
   const config = await (deps.loadConfig ?? loadDaemonConfig)(stateDir);
-  const advertisedBaseUrl = parseAdvertisedBaseUrlArg(args) ?? env.PI_REMOTE_CONTROL_ADVERTISED_BASE_URL ?? config.advertisedBaseUrl;
+  const advertisedBaseUrl = parseAdvertisedBaseUrlArg(args) ?? env.PI_REMOTE_CONTROL_ADVERTISED_BASE_URL ?? config.advertisedBaseUrl ?? env.PI_REMOTE_CONTROL_URL;
   if (!advertisedBaseUrl) {
     writeLine("advertisedBaseUrl is required for QR pairing.");
     writeLine("Set ~/.pi/remote-control/config.json or PI_REMOTE_CONTROL_ADVERTISED_BASE_URL to an iOS-reachable URL.");

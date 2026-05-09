@@ -289,6 +289,27 @@ describe("daemon CLI", () => {
     ]);
   });
 
+  it("uses PI_REMOTE_CONTROL_URL as pairing URL fallback", async () => {
+    const lines: string[] = [];
+    const code = await main(["pair", "--state-dir", "/tmp/state"], {
+      env: { PI_REMOTE_CONTROL_URL: "https://macbook.tailnet.ts.net:17373" },
+      ensureStateDir: async () => undefined,
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:17373" }),
+      openStore: () => ({
+        close: () => undefined,
+        authenticateToken: async () => false,
+        createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+        claimPairingCode: async () => undefined,
+      }),
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(lines.at(-1)).toBe(
+      "Pairing link: pi-remote://pair?baseUrl=https%3A%2F%2Fmacbook.tailnet.ts.net%3A17373&code=123456&expiresAt=2026-05-09T00%3A01%3A00.000Z",
+    );
+  });
+
   it("creates and prints a local TUI pairing link", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
