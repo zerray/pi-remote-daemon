@@ -44,9 +44,6 @@ export function toolStatusFromPiEvent(event: PiToolExecutionEvent, now: Date): T
 }
 
 export function statusFromPiToolEvent(event: PiToolExecutionEvent): ToolCallStatusValue {
-  // Return running for start/update.
-  // Return failed for end events with isError.
-  // Return succeeded for successful end events.
-  void event;
-  throw new NotImplementedError("statusFromPiToolEvent");
+  if (event.type === "tool_execution_end") return event.isError ? "failed" : "succeeded";
+  return "running";
 }
