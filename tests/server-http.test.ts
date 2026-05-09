@@ -210,4 +210,28 @@ describe("daemon HTTP server", () => {
       },
     );
   });
+
+  it("aborts authenticated sessions", async () => {
+    const aborted: string[] = [];
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/abort`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ aborted: true });
+        expect(aborted).toEqual(["sess_1"]);
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          abortSession: async (sessionId) => {
+            aborted.push(sessionId);
+          },
+        },
+      },
+    );
+  });
 });

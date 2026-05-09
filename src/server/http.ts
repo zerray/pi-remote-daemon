@@ -30,6 +30,7 @@ export type SessionService = {
   createProjectSession?(projectId: string): Promise<RemoteSessionSummary>;
   getSessionState?(sessionId: string): Promise<RemoteSessionState>;
   promptSession?(sessionId: string, request: PromptSessionRequest): Promise<void>;
+  abortSession?(sessionId: string): Promise<void>;
 };
 
 export type DaemonServer = {
@@ -91,6 +92,19 @@ async function handleHttpRequest(
     }
 
     writeJson(response, 200, { projects: options.config.allowedProjects });
+    return;
+  }
+
+  const abortMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/abort$/);
+  if (request.method === "POST" && abortMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(abortMatch[1] ?? "");
+    await options.sessionService?.abortSession?.(sessionId);
+    writeJson(response, 200, { aborted: true });
     return;
   }
 
