@@ -236,6 +236,25 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("rejects unauthenticated pairing code creation on non-loopback binds", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
+
+        expect(response.status).toBe(401);
+      },
+      {
+        config: { bindAddress: "0.0.0.0:0", allowedProjects: [] },
+        pairService: {
+          createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+          claimPairingCode: async () => {
+            throw new Error("not used");
+          },
+        },
+      },
+    );
+  });
+
   it("creates pairing codes on loopback when no authenticator is configured", async () => {
     await withServer(
       async (baseUrl) => {
