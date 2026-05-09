@@ -6,8 +6,11 @@ export default function remoteDaemonExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       const commandArgs = splitArgs(args.trim() || "status");
       const result = await pi.exec("pi-remote-daemon", commandArgs);
-      const output = result.stdout.trim() || result.stderr.trim() || `pi-remote-daemon ${commandArgs.join(" ")} exited ${result.code}`;
-      ctx.ui.notify(output, result.code === 0 ? "info" : "error");
+      const stdout = result.stdout.trim();
+      const stderr = result.stderr.trim();
+      const output = stdout || stderr || `pi-remote-daemon ${commandArgs.join(" ")} exited ${result.code}`;
+      const type = result.code === 0 ? "info" : stdout ? "warning" : "error";
+      ctx.ui.notify(output, type);
     },
   });
 }

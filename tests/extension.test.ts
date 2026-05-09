@@ -91,4 +91,22 @@ describe("remote daemon extension", () => {
 
     expect(notifications).toEqual([{ message: "boom", type: "error" }]);
   });
+
+  it("shows nonzero status output as a warning", async () => {
+    const commands: Registered[] = [];
+    const notifications: Array<{ message: string; type?: "info" | "warning" | "error" }> = [];
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      exec: async () => ({ stdout: "pi-remote-daemon is stopped\n", stderr: "", code: 1, killed: false }),
+    };
+    remoteDaemonExtension(pi as never);
+
+    await commands[0]!.handler("status", {
+      ui: { notify: (message, type) => notifications.push({ message, type }) },
+    });
+
+    expect(notifications).toEqual([{ message: "pi-remote-daemon is stopped", type: "warning" }]);
+  });
 });
