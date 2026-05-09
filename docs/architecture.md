@@ -17,13 +17,12 @@ The extension must not host the daemon server in-process. Pi extensions are load
 
 The daemon is started by one of these explicit singleton mechanisms:
 
-1. OS service manager, preferred for regular use:
-   - macOS `launchd` user agent.
-   - Linux `systemd --user` service.
-2. Manual CLI:
+1. Manual CLI:
    - `pi-remote-daemon start`.
-3. Pi extension command:
+2. Pi extension command:
    - `/remote-daemon start` starts the same detached daemon binary after checking whether it is already running.
+
+OS service installation is intentionally deferred for the MVP.
 
 The extension may perform a cheap health check on Pi startup, but it must not auto-start the daemon by default. If an auto-start option is added later, it must still acquire the daemon singleton lock before spawning and must return immediately when an existing daemon is healthy.
 
