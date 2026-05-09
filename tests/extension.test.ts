@@ -57,7 +57,9 @@ describe("remote daemon extension", () => {
 
     await commands[0]!.handler("status", ctx);
 
-    expect(execCalls).toEqual([{ command: "pi-remote-daemon", args: ["status"] }]);
+    expect(execCalls).toEqual([
+      { command: process.execPath, args: [expect.stringContaining("dist/cli.js"), "status"] },
+    ]);
     expect(notifications).toEqual([{ message: "ok", type: "info" }]);
   });
 
