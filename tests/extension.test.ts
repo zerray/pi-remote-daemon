@@ -73,4 +73,22 @@ describe("remote daemon extension", () => {
       { command: "pi-remote-daemon", args: ["start", "--bind", "127.0.0.1:17373"] },
     ]);
   });
+
+  it("shows daemon CLI failures as errors", async () => {
+    const commands: Registered[] = [];
+    const notifications: Array<{ message: string; type?: "info" | "warning" | "error" }> = [];
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      exec: async () => ({ stdout: "", stderr: "boom\n", code: 1, killed: false }),
+    };
+    remoteDaemonExtension(pi as never);
+
+    await commands[0]!.handler("status", {
+      ui: { notify: (message, type) => notifications.push({ message, type }) },
+    });
+
+    expect(notifications).toEqual([{ message: "boom", type: "error" }]);
+  });
 });
