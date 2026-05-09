@@ -12,10 +12,8 @@ export function getDaemonStateDir(options: StateDirOptions = {}): string {
   const env = options.env ?? process.env;
   if (env.PI_REMOTE_DAEMON_DIR) return resolve(env.PI_REMOTE_DAEMON_DIR);
 
-  // Otherwise use the provided home directory or OS home directory.
-  // Append .pi/remote-daemon to the home directory.
-  void join;
-  throw new NotImplementedError("getDaemonStateDir");
+  const home = options.homeDir ?? homedir();
+  return join(home, ".pi", "remote-daemon");
 }
 
 export async function ensureDaemonStateDir(path: string): Promise<void> {
