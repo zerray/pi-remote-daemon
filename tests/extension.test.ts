@@ -60,4 +60,17 @@ describe("remote daemon extension", () => {
     expect(execCalls).toEqual([{ command: "pi-remote-daemon", args: ["status"] }]);
     expect(notifications).toEqual([{ message: "ok", type: "info" }]);
   });
+
+  it("passes start options to the daemon CLI", async () => {
+    const execCalls: ExecCall[] = [];
+    const { pi, commands } = createFakePi(execCalls);
+    const { ctx } = createContext();
+    remoteDaemonExtension(pi as never);
+
+    await commands[0]!.handler("start --bind 127.0.0.1:17373", ctx);
+
+    expect(execCalls).toEqual([
+      { command: "pi-remote-daemon", args: ["start", "--bind", "127.0.0.1:17373"] },
+    ]);
+  });
 });
