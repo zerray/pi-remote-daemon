@@ -7,9 +7,7 @@ Private relay daemon for iOS remote control of explicitly enabled Pi TUI session
 Install as a Pi package:
 
 ```bash
-pi install ./pi-remote-control          # from this repository's parent directory
-# or, from this package directory:
-pi install .
+pi install https://github.com/zerray/pi-remote-control
 ```
 
 After installation, open a Pi TUI session and run:
