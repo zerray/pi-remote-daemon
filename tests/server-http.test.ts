@@ -49,6 +49,76 @@ describe("daemon HTTP server", () => {
     });
   });
 
+  it("registers and unregisters active TUI sessions from package-internal endpoints", async () => {
+    const activeSessions = createActiveSessionRegistry();
+
+    await withServer(
+      async (baseUrl) => {
+        const registerResponse = await fetch(`${baseUrl}/v1/tui/sessions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            id: "sess_1",
+            piSessionId: "pi_1",
+            project: { id: "proj_1", name: "Example", path: "/repo/example" },
+            sessionFile: "/tmp/session.jsonl",
+            pid: 1234,
+            messageCount: 0,
+            isStreaming: false,
+            updatedAt: "2026-05-09T00:00:00.000Z",
+          }),
+        });
+        expect(registerResponse.status).toBe(200);
+        await expect(registerResponse.json()).resolves.toMatchObject({ session: { id: "sess_1", projectId: "proj_1" } });
+        expect(activeSessions.listProjects()).toEqual([{ id: "proj_1", name: "Example", path: "/repo/example" }]);
+
+        const unregisterResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1`, { method: "DELETE" });
+        expect(unregisterResponse.status).toBe(200);
+        await expect(unregisterResponse.json()).resolves.toEqual({ unregistered: true });
+        expect(activeSessions.listProjects()).toEqual([]);
+      },
+      { activeSessions },
+    );
+  });
+
+  it("broadcasts TUI session events to iOS WebSocket subscribers", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+
+        const event = { type: "assistant_delta", messageId: "msg_1", text: "hello" };
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        expect(response.status).toBe(200);
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        expect(messages).toContainEqual(event);
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("lists active TUI projects for authenticated devices", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({

@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { ActiveSessionRegistry } from "../active-session-registry.js";
 import type { DaemonConfig } from "../types.js";
 
@@ -74,14 +74,17 @@ export type StartServerOptions = {
   pairService?: PairService;
 };
 
+type StreamHub = Map<string, Set<WebSocket>>;
+
 export async function startDaemonServer(options: StartServerOptions): Promise<DaemonServer> {
+  const streamHub: StreamHub = new Map();
   const server = createServer((request, response) => {
-    void handleHttpRequest(request, response, options);
+    void handleHttpRequest(request, response, options, streamHub);
   });
   const webSockets = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (request, socket, head) => {
-    void handleUpgrade(request, socket, head, webSockets, options);
+    void handleUpgrade(request, socket, head, webSockets, options, streamHub);
   });
 
   const { host, port } = parseBindAddress(options.config.bindAddress);
@@ -108,6 +111,7 @@ async function handleHttpRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: StartServerOptions,
+  streamHub: StreamHub,
 ): Promise<void> {
   if (request.method === "GET" && request.url === "/v1/health") {
     writeJson(response, 200, {
@@ -115,6 +119,32 @@ async function handleHttpRequest(
       piVersion: options.piVersion ?? "unknown",
       daemonVersion: options.daemonVersion ?? "0.1.0",
     });
+    return;
+  }
+
+  if (request.method === "POST" && request.url === "/v1/tui/sessions") {
+    const body = (await readJsonBody(request)) as Parameters<ActiveSessionRegistry["registerSession"]>[0];
+    const session = options.activeSessions?.registerSession(body);
+    writeJson(response, session ? 200 : 503, session ? { session } : { error: "active_sessions_unavailable" });
+    return;
+  }
+
+  const tuiSessionMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
+  if (request.method === "DELETE" && tuiSessionMatch) {
+    const sessionId = decodeURIComponent(tuiSessionMatch[1] ?? "");
+    const unregistered = options.activeSessions?.unregisterSession(sessionId) ?? false;
+    streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "session_closed" }));
+    streamHub.delete(sessionId);
+    writeJson(response, 200, { unregistered });
+    return;
+  }
+
+  const tuiEventMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
+  if (request.method === "POST" && tuiEventMatch) {
+    const sessionId = decodeURIComponent(tuiEventMatch[1] ?? "");
+    const event = await readJsonBody(request);
+    streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+    writeJson(response, 200, { accepted: true });
     return;
   }
 
@@ -211,6 +241,7 @@ async function handleUpgrade(
   head: Buffer,
   webSockets: WebSocketServer,
   options: StartServerOptions,
+  streamHub: StreamHub,
 ): Promise<void> {
   const streamMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
   if (!streamMatch) {
@@ -228,8 +259,16 @@ async function handleUpgrade(
   const sessionId = decodeURIComponent(streamMatch[1] ?? "");
   webSockets.handleUpgrade(request, socket, head, (webSocket) => {
     webSockets.emit("connection", webSocket, request);
+    const subscribers = streamHub.get(sessionId) ?? new Set<WebSocket>();
+    subscribers.add(webSocket);
+    streamHub.set(sessionId, subscribers);
+    webSocket.once("close", () => subscribers.delete(webSocket));
+
+    const activeState = options.activeSessions?.getSessionState(sessionId);
+    if (activeState) sendWebSocketJson(webSocket, { type: "session_state", ...activeState });
+
     void options.sessionService?.streamSession?.(sessionId, (event) => {
-      if (webSocket.readyState === webSocket.OPEN) webSocket.send(JSON.stringify(event));
+      sendWebSocketJson(webSocket, event);
     });
   });
 }
@@ -259,4 +298,8 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+function sendWebSocketJson(webSocket: WebSocket, event: unknown): void {
+  if (webSocket.readyState === WebSocket.OPEN) webSocket.send(JSON.stringify(event));
 }
