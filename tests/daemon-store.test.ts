@@ -5,6 +5,20 @@ import { describe, expect, it } from "vitest";
 import { openDaemonStore } from "../src/persistence/daemon-store.js";
 
 describe("daemon store", () => {
+  it("rejects duplicate pairing claims", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-store-"));
+    try {
+      const store = openDaemonStore(root);
+      const pair = await store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000);
+
+      await expect(store.claimPairingCode(pair.pairCode, "iPhone", new Date("2026-05-09T00:00:30.000Z"))).resolves.toBeDefined();
+      await expect(store.claimPairingCode(pair.pairCode, "iPad", new Date("2026-05-09T00:00:40.000Z"))).resolves.toBeUndefined();
+      store.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("authenticates claimed device tokens", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-store-"));
     try {
