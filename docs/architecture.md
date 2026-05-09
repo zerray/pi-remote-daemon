@@ -63,6 +63,19 @@ The daemon responsibilities are independent of active Pi TUI sessions:
 
 The daemon creates live Pi runtimes only when a remote client opens or interacts with a session. A daemon process may maintain multiple session controllers, keyed by daemon session ID, subject to a resource limit. Idle controllers can be disposed and recreated from the persisted Pi session file.
 
+## Persistence model
+
+The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-daemon` and overridable with `PI_REMOTE_DAEMON_DIR`.
+
+Durable daemon-owned files:
+
+- `config.json`: daemon configuration such as bind address and allowed project roots.
+- `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, project records, metadata, and session index cache.
+- `daemon.lock`: singleton lock file.
+- `daemon.pid`: best-effort process metadata for status commands.
+
+Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon does not duplicate full conversation history. It stores only references, cached summary fields, and app-facing stable IDs needed to serve the remote API.
+
 ## Installation model
 
 The package can be installed with Pi package installation, for example from a local path, git source, or npm source. The package manifest exposes the extension through the `pi.extensions` field and the daemon binary through the normal package binary entry.
