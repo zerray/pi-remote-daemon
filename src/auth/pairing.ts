@@ -22,12 +22,10 @@ export function hashPairingCode(rawCode: string): string {
 }
 
 export function canClaimPairingCode(pairingCode: PairingCode, rawCode: string, now: Date): boolean {
-  // Reject consumed codes.
-  // Reject expired codes.
-  // Hash the candidate raw code and compare with timingSafeEqual.
-  void pairingCode;
-  void rawCode;
-  void now;
-  void timingSafeEqual;
-  throw new NotImplementedError("canClaimPairingCode");
+  if (pairingCode.consumedAt) return false;
+  if (Date.parse(pairingCode.expiresAt) <= now.getTime()) return false;
+
+  const expected = Buffer.from(pairingCode.codeHash);
+  const actual = Buffer.from(hashPairingCode(rawCode));
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
