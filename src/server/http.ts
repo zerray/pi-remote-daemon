@@ -127,9 +127,17 @@ async function handleHttpRequest(
   }
 
   if (request.method === "POST" && request.url === "/v1/pair/claim") {
-    const body = (await readJsonBody(request)) as PairClaimRequest;
-    const result = await options.pairService?.claimPairingCode(body);
-    writeJson(response, 200, result ?? { error: "pairing_unavailable" });
+    try {
+      const body = (await readJsonBody(request)) as PairClaimRequest;
+      const result = await options.pairService?.claimPairingCode(body);
+      writeJson(response, 200, result ?? { error: "pairing_unavailable" });
+    } catch (error) {
+      if (error instanceof Error && error.message === "Invalid or expired pairing code") {
+        writeJson(response, 400, { error: "invalid_pairing_code" });
+      } else {
+        writeJson(response, 500, { error: "internal_error" });
+      }
+    }
     return;
   }
 

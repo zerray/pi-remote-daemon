@@ -313,6 +313,28 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("returns 400 for invalid pairing claims", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/pair/claim`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pairCode: "000000", deviceName: "iPhone" }),
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: "invalid_pairing_code" });
+      },
+      {
+        pairService: {
+          claimPairingCode: async () => {
+            throw new Error("Invalid or expired pairing code");
+          },
+        },
+      },
+    );
+  });
+
   it("issues usable bearer tokens through the pair flow", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-pair-http-"));
     const store = openDaemonStore(root);
