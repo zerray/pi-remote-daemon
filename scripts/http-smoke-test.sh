@@ -49,6 +49,8 @@ if [[ -z "${TOKEN}" ]]; then
   exit 0
 fi
 
+request POST /v1/pair/code "" "${auth_headers[@]}"
+
 request GET /v1/projects "" "${auth_headers[@]}"
 
 if [[ -n "${PROJECT_ID}" ]]; then

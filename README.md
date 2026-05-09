@@ -8,6 +8,9 @@ Private daemon that exposes authenticated remote access to local Pi sessions for
 npm install
 npm run build
 PI_REMOTE_DAEMON_DEV_TOKEN=test-token node dist/cli.js start --bind 127.0.0.1:17373
+node dist/cli.js status
+PI_REMOTE_DAEMON_DEV_TOKEN=test-token node dist/cli.js pair
+node dist/cli.js stop
 ```
 
 In another shell:
