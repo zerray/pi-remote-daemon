@@ -20,6 +20,7 @@ type ExtensionTestContext = {
   };
   isIdle(): boolean;
   ui: {
+    theme: { fg(color: string, text: string): string };
     notify(message: string, type?: "info" | "warning" | "error"): void;
     setStatus(key: string, text: string | undefined): void;
   };
@@ -65,6 +66,7 @@ function createContext() {
       },
       isIdle: () => true,
       ui: {
+        theme: { fg: (color: string, text: string) => (color === "success" ? `\u001b[32m${text}\u001b[39m` : text) },
         notify(message: string, type?: "info" | "warning" | "error") {
           notifications.push({ message, type });
         },
@@ -224,7 +226,7 @@ describe("remote control extension", () => {
     await command.handler("", ctx);
 
     expect(statuses).toEqual([
-      { key: "remote-control", text: "Remote Control Active" },
+      { key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" },
       { key: "remote-control", text: undefined },
     ]);
   });

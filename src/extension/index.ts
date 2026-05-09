@@ -112,7 +112,7 @@ function registerEventForwarders(
 }
 
 function setRemoteControlStatus(ctx: ExtensionContext): void {
-  ctx.ui.setStatus("remote-control", "Remote Control Active");
+  ctx.ui.setStatus("remote-control", ctx.ui.theme.fg("success", "Remote Control Active"));
 }
 
 function clearRemoteControlStatus(ctx: ExtensionContext): void {
