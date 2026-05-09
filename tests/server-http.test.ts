@@ -236,6 +236,35 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("creates pairing codes for authenticated local operators", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/pair/code`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          pairCode: "123456",
+          expiresAt: "2026-05-09T00:01:00.000Z",
+        });
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        pairService: {
+          createPairingCode: async () => ({
+            pairCode: "123456",
+            expiresAt: "2026-05-09T00:01:00.000Z",
+          }),
+          claimPairingCode: async () => {
+            throw new Error("not used");
+          },
+        },
+      },
+    );
+  });
+
   it("claims pairing codes without bearer auth", async () => {
     await withServer(
       async (baseUrl) => {

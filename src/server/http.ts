@@ -52,7 +52,13 @@ export type PairClaimResponse = {
   daemonName: string;
 };
 
+export type PairCodeResponse = {
+  pairCode: string;
+  expiresAt: string;
+};
+
 export type PairService = {
+  createPairingCode?(): Promise<PairCodeResponse>;
   claimPairingCode(request: PairClaimRequest): Promise<PairClaimResponse>;
 };
 
@@ -107,6 +113,16 @@ async function handleHttpRequest(
       piVersion: options.piVersion ?? "unknown",
       daemonVersion: options.daemonVersion ?? "0.1.0",
     });
+    return;
+  }
+
+  if (request.method === "POST" && request.url === "/v1/pair/code") {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    const result = await options.pairService?.createPairingCode?.();
+    writeJson(response, 200, result ?? { error: "pairing_unavailable" });
     return;
   }
 
