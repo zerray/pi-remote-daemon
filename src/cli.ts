@@ -103,9 +103,14 @@ async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
   const lockFile = join(stateDir, "daemon.lock");
   try {
     const pid = Number.parseInt((await readTextFile(lockFile)).trim(), 10);
-    (deps.sendSignal ?? process.kill)(pid, "SIGTERM");
+    try {
+      (deps.sendSignal ?? process.kill)(pid, "SIGTERM");
+      writeLine(`pi-remote-daemon stop requested (pid ${pid})`);
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ESRCH")) throw error;
+      writeLine(`pi-remote-daemon stale lock removed (pid ${pid})`);
+    }
     await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(lockFile);
-    writeLine(`pi-remote-daemon stop requested (pid ${pid})`);
     return 0;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {

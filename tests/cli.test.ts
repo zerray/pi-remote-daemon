@@ -227,6 +227,25 @@ describe("daemon CLI", () => {
     expect(lines).toEqual(["pi-remote-daemon is not running"]);
   });
 
+  it("removes stale lock when stopping a missing process", async () => {
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const code = await main(["stop", "--state-dir", "/tmp/state"], {
+      readTextFile: async () => "1234\n",
+      sendSignal: () => {
+        const error = new Error("missing process") as Error & { code: string };
+        error.code = "ESRCH";
+        throw error;
+      },
+      removeFile: async (path) => calls.push({ removeFile: path }),
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ removeFile: "/tmp/state/daemon.lock" }]);
+    expect(lines).toEqual(["pi-remote-daemon stale lock removed (pid 1234)"]);
+  });
+
   it("stops a running daemon from its lock file", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
