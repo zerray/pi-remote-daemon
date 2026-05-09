@@ -60,4 +60,19 @@ describe("daemon CLI", () => {
     expect(code).toBe(1);
     expect(lines).toEqual(["pi-remote-daemon is stopped"]);
   });
+
+  it("reports running status from pid file", async () => {
+    const lines: string[] = [];
+    const code = await main(["status", "--state-dir", "/tmp/state"], {
+      readTextFile: async (path) => {
+        expect(path).toBe("/tmp/state/daemon.pid");
+        return "1234\n";
+      },
+      isProcessRunning: (pid) => pid === 1234,
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(lines).toEqual(["pi-remote-daemon is running (pid 1234)"]);
+  });
 });
