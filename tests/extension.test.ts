@@ -95,10 +95,17 @@ describe("remote control extension", () => {
         return { stdout: "", stderr: "", code: 0, killed: false };
       },
     };
+    const healthOutcomes = [new TypeError("fetch failed"), new Response(JSON.stringify({ status: "ok" }), { status: 200 })];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init: RequestInit) => {
-        fetchCalls.push({ url, init: { method: init.method, body: JSON.parse(String(init.body)) } });
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/health")) {
+          fetchCalls.push({ url, init: undefined });
+          const outcome = healthOutcomes.shift();
+          if (outcome instanceof Error) throw outcome;
+          return outcome!;
+        }
+        fetchCalls.push({ url, init: { method: init?.method, body: JSON.parse(String(init?.body)) } });
         return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
       }),
     );
@@ -109,6 +116,8 @@ describe("remote control extension", () => {
     expect(execCalls[0]).toEqual({ command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] });
     expect(execCalls[1]?.command).toBe("sh");
     expect(fetchCalls).toEqual([
+      { url: "http://127.0.0.1:17373/v1/health", init: undefined },
+      { url: "http://127.0.0.1:17373/v1/health", init: undefined },
       {
         url: "http://127.0.0.1:17373/v1/tui/sessions",
         init: {

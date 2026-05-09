@@ -78,6 +78,24 @@ async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
 
   const shellLine = `${shellQuote(cli.command)} ${[...cli.args, "start"].map(shellQuote).join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
   await pi.exec("sh", ["-lc", shellLine]);
+  await waitForDaemonReady();
+}
+
+async function waitForDaemonReady(attempts = 20, delayMs = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${daemonBaseUrl()}/v1/health`);
+      if (response.ok) return;
+    } catch {
+      // The daemon may not have bound its HTTP port yet.
+    }
+    await delay(delayMs);
+  }
+  throw new Error("pi-remote-control did not become ready");
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function toRegistration(ctx: ExtensionCommandContext): unknown {
