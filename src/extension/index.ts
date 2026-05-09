@@ -1,38 +1,83 @@
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { projectIdForPath } from "../session-index.js";
 
-export default function remoteDaemonExtension(pi: ExtensionAPI): void {
+export default function remoteControlExtension(pi: ExtensionAPI): void {
+  const activeSessionIds = new Set<string>();
   pi.registerCommand("remote-control", {
-    description: "Control the Pi remote control",
-    handler: async (args, ctx) => {
-      const commandArgs = splitArgs(args.trim() || "status");
-      const cli = cliCommand();
-      if (commandArgs[0] === "start") {
-        const status = await pi.exec(cli.command, [...cli.args, "status"]);
-        const statusOutput = status.stdout.trim();
-        if (status.code === 0) {
-          ctx.ui.notify(statusOutput || "pi-remote-control is already running", "warning");
-          return;
-        }
-
-        const shellLine = `${shellQuote(cli.command)} ${[...cli.args, ...commandArgs]
-          .map(shellQuote)
-          .join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
-        await pi.exec("sh", ["-lc", shellLine]);
-        ctx.ui.notify("pi-remote-control start requested", "info");
+    description: "Toggle Pi remote control for this TUI session",
+    handler: async (_args, ctx) => {
+      await ensureDaemonStarted(pi);
+      const sessionId = daemonSessionId(ctx);
+      if (activeSessionIds.has(sessionId)) {
+        await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        activeSessionIds.delete(sessionId);
+        ctx.ui.notify("Remote control disabled for this session", "info");
         return;
       }
 
-      const result = await pi.exec(cli.command, [...cli.args, ...commandArgs]);
-      const stdout = result.stdout.trim();
-      const stderr = result.stderr.trim();
-      const output = stdout || stderr || `pi-remote-control ${commandArgs.join(" ")} exited ${result.code}`;
-      const type = result.code === 0 ? "info" : stdout ? "warning" : "error";
-      ctx.ui.notify(output, type);
+      const response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(toRegistration(ctx)),
+      });
+      if (!response.ok) {
+        ctx.ui.notify(`Remote control enable failed: HTTP ${response.status}`, "error");
+        return;
+      }
+      activeSessionIds.add(sessionId);
+      ctx.ui.notify("Remote control enabled for this session", "info");
     },
   });
+
+  pi.registerCommand("remote-control-pair", {
+    description: "Display a QR pairing link for Pi Remote Control",
+    handler: async (_args, ctx) => {
+      await ensureDaemonStarted(pi);
+      const cli = cliCommand();
+      const result = await pi.exec(cli.command, [...cli.args, "pair"]);
+      const stdout = result.stdout.trim();
+      const stderr = result.stderr.trim();
+      const output = stdout || stderr || `pi-remote-control pair exited ${result.code}`;
+      ctx.ui.notify(output, result.code === 0 ? "info" : "error");
+    },
+  });
+}
+
+async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
+  const cli = cliCommand();
+  const status = await pi.exec(cli.command, [...cli.args, "status"]);
+  if (status.code === 0) return;
+
+  const shellLine = `${shellQuote(cli.command)} ${[...cli.args, "start"].map(shellQuote).join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
+  await pi.exec("sh", ["-lc", shellLine]);
+}
+
+function toRegistration(ctx: ExtensionCommandContext): unknown {
+  const cwd = ctx.cwd;
+  const piSessionId = ctx.sessionManager.getSessionId();
+  const sessionFile = ctx.sessionManager.getSessionFile() ?? "";
+  return {
+    id: daemonSessionId(ctx),
+    piSessionId,
+    project: { id: projectIdForPath(cwd), name: basename(cwd), path: cwd },
+    sessionFile,
+    name: ctx.sessionManager.getSessionName(),
+    pid: process.pid,
+    messageCount: ctx.sessionManager.getEntries().length,
+    isStreaming: !ctx.isIdle(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function daemonSessionId(ctx: ExtensionCommandContext): string {
+  return `sess_${ctx.sessionManager.getSessionId()}`;
+}
+
+function daemonBaseUrl(): string {
+  return process.env.PI_REMOTE_CONTROL_URL ?? "http://127.0.0.1:17373";
 }
 
 function cliCommand(): { command: string; args: string[] } {
@@ -45,10 +90,6 @@ function cliCommand(): { command: string; args: string[] } {
   if (existsSync(distCli)) return { command: process.execPath, args: [distCli] };
 
   return { command: "pi-remote-control", args: [] };
-}
-
-function splitArgs(input: string): string[] {
-  return input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? [];
 }
 
 function shellQuote(value: string): string {
