@@ -43,6 +43,41 @@ describe("daemon CLI", () => {
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });
 
+  it("starts with persistent store authentication and pairing", async () => {
+    let startOptions: Parameters<NonNullable<CliDependencies["startServer"]>>[0] | undefined;
+    const calls: unknown[] = [];
+    const code = await main(["start"], {
+      getStateDir: () => "/tmp/state",
+      ensureStateDir: async () => undefined,
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      openStore: (stateDir) => {
+        calls.push({ openStore: stateDir });
+        return {
+          close: () => calls.push({ closeStore: true }),
+          authenticateToken: async (token) => token === "stored-token",
+          createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+          claimPairingCode: async () => ({ deviceId: "dev_1", token: "prd_1", daemonName: "pi-remote-daemon" }),
+        };
+      },
+      startServer: async (options) => {
+        startOptions = options;
+        return { address: "127.0.0.1:9999", close: async () => undefined };
+      },
+      writeTextFile: async () => undefined,
+      removeFile: async () => undefined,
+      waitForShutdown: async () => undefined,
+      writeLine: () => undefined,
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ openStore: "/tmp/state" }, { closeStore: true }]);
+    await expect(startOptions?.authenticateToken?.("stored-token")).resolves.toBe(true);
+    await expect(startOptions?.pairService?.createPairingCode?.()).resolves.toEqual({
+      pairCode: "123456",
+      expiresAt: "2026-05-09T00:01:00.000Z",
+    });
+  });
+
   it("starts with an in-memory pairing code service", async () => {
     let startOptions: Parameters<NonNullable<CliDependencies["startServer"]>>[0] | undefined;
     const code = await main(["start"], {

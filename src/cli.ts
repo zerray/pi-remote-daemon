@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { canClaimPairingCode, createPairingCode } from "./auth/pairing.js";
-import { issueDeviceToken } from "./auth/tokens.js";
 import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
+import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
 import type { DaemonConfig } from "./types.js";
@@ -13,6 +12,7 @@ export type CliDependencies = {
   ensureStateDir?: (stateDir: string) => Promise<void>;
   loadConfig?: (stateDir: string) => Promise<DaemonConfig>;
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
+  openStore?: (stateDir: string) => DaemonStore;
   waitForShutdown?: () => Promise<void>;
   readTextFile?: (path: string) => Promise<string>;
   writeTextFile?: (path: string, content: string) => Promise<void>;
@@ -47,22 +47,17 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   });
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
   const devToken = env.PI_REMOTE_DAEMON_DEV_TOKEN;
-  let currentPairingCode: ReturnType<typeof createPairingCode> | undefined;
+  const store = (deps.openStore ?? openDaemonStore)(stateDir);
   const server = await (deps.startServer ?? startDaemonServer)({
     stateDir,
     config,
-    authenticateToken: devToken ? (token) => token === devToken : undefined,
+    authenticateToken: devToken ? (token) => token === devToken || store.authenticateToken(token) : (token) => store.authenticateToken(token),
     pairService: {
-      async createPairingCode() {
-        currentPairingCode = createPairingCode(new Date(), 5 * 60_000);
-        return { pairCode: currentPairingCode.rawCode, expiresAt: currentPairingCode.expiresAt };
-      },
-      async claimPairingCode(request) {
-        if (!currentPairingCode || !canClaimPairingCode(currentPairingCode, request.pairCode, new Date())) {
-          throw new Error("Invalid or expired pairing code");
-        }
-        const token = issueDeviceToken();
-        return { deviceId: `dev_${Date.now().toString(36)}`, token: token.rawToken, daemonName: "pi-remote-daemon" };
+      createPairingCode: () => store.createPairingCode(new Date(), 5 * 60_000),
+      claimPairingCode: async (request) => {
+        const claimed = await store.claimPairingCode(request.pairCode, request.deviceName, new Date());
+        if (!claimed) throw new Error("Invalid or expired pairing code");
+        return claimed;
       },
     },
   });
@@ -74,6 +69,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
 
   await (deps.waitForShutdown ?? waitForInterrupt)();
   await server.close();
+  store.close();
   await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
   return 0;
 }
