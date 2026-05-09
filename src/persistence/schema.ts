@@ -13,10 +13,13 @@ export function createSchemaSql(): string[] {
 }
 
 export function migrateSchemaSql(fromVersion: number, toVersion = SCHEMA_VERSION): string[] {
-  // Validate the requested migration range.
-  // Return ordered migration SQL statements.
-  // For version 1, create the initial schema and store schema version in meta.
-  void fromVersion;
-  void toVersion;
-  throw new NotImplementedError("migrateSchemaSql");
+  if (fromVersion === toVersion) return [];
+  if (fromVersion !== 0 || toVersion !== SCHEMA_VERSION) {
+    throw new Error(`Unsupported schema migration: ${fromVersion} -> ${toVersion}`);
+  }
+
+  return [
+    ...createSchemaSql(),
+    `insert or replace into meta (key, value) values ('schema_version', '${SCHEMA_VERSION}')`,
+  ];
 }
