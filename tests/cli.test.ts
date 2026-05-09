@@ -112,4 +112,26 @@ describe("daemon CLI", () => {
     ]);
     expect(lines).toEqual(["pi-remote-daemon stop requested (pid 1234)"]);
   });
+
+  it("requests and prints a pairing code", async () => {
+    const lines: string[] = [];
+    const requests: unknown[] = [];
+    const code = await main(["pair", "--base-url", "http://127.0.0.1:9999"], {
+      env: { PI_REMOTE_DAEMON_DEV_TOKEN: "test-token" },
+      fetchJson: async (url, init) => {
+        requests.push({ url, init });
+        return { pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" };
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:9999/v1/pair/code",
+        init: { method: "POST", headers: { authorization: "Bearer test-token" } },
+      },
+    ]);
+    expect(lines).toEqual(["Pair code: 123456", "Expires at: 2026-05-09T00:01:00.000Z"]);
+  });
 });

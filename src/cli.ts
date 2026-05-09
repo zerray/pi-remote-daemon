@@ -17,6 +17,7 @@ export type CliDependencies = {
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
+  fetchJson?: (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<unknown>;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
 };
@@ -26,6 +27,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   const env = deps.env ?? process.env;
   if (command === "status") return statusCommand(argv.slice(1), deps, env);
   if (command === "stop") return stopCommand(argv.slice(1), deps, env);
+  if (command === "pair") return pairCommand(argv.slice(1), deps, env);
   if (command !== "start") {
     (deps.writeLine ?? console.log)("Usage: pi-remote-daemon start|stop|status|pair [options]");
     return command === "--help" || command === "-h" ? 0 : 1;
@@ -57,6 +59,19 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   await (deps.waitForShutdown ?? waitForInterrupt)();
   await server.close();
   await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
+  return 0;
+}
+
+async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
+  const baseUrl = parseBaseUrlArg(args) ?? env.PI_REMOTE_DAEMON_URL ?? "http://127.0.0.1:17373";
+  const token = env.PI_REMOTE_DAEMON_DEV_TOKEN;
+  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
+  const result = (await (deps.fetchJson ?? fetchJson)(`${baseUrl}/v1/pair/code`, { method: "POST", headers })) as {
+    pairCode?: string;
+    expiresAt?: string;
+  };
+  (deps.writeLine ?? console.log)(`Pair code: ${result.pairCode}`);
+  (deps.writeLine ?? console.log)(`Expires at: ${result.expiresAt}`);
   return 0;
 }
 
@@ -98,6 +113,19 @@ async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.
     }
     throw error;
   }
+}
+
+function parseBaseUrlArg(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--base-url") return args[index + 1];
+  }
+  return undefined;
+}
+
+async function fetchJson(url: string, init?: { method?: string; headers?: Record<string, string> }): Promise<unknown> {
+  const response = await fetch(url, init);
+  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+  return response.json();
 }
 
 function parseStateDirArg(args: string[]): string | undefined {
