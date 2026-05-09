@@ -54,6 +54,28 @@ describe("active TUI session registry", () => {
     expect(registry.takeCommands("sess_1")).toEqual([]);
   });
 
+  it("replaces snapshot messages after registration", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.replaceSessionMessages("sess_1", [
+      { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } },
+    ])).toBe(true);
+    expect(registry.replaceSessionMessages("missing", [])).toBe(false);
+    expect(registry.getSessionState("sess_1")?.messages).toEqual([
+      { id: "msg_1", role: "user", text: "hello", createdAt: "2026-05-09T00:00:00.000Z", isStreaming: false },
+    ]);
+  });
+
   it("returns snapshots for active sessions", () => {
     const registry = createActiveSessionRegistry();
     registry.registerSession({

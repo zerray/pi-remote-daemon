@@ -264,6 +264,36 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("accepts snapshot entries after TUI session registration", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/snapshot`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ entries: [{ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } }] }),
+        });
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true });
+        expect(activeSessions.getSessionState("sess_1")?.messages).toEqual([
+          { id: "msg_1", role: "user", text: "hello", createdAt: "2026-05-09T00:00:00.000Z", isStreaming: false },
+        ]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("lets TUI extensions take queued remote commands", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
