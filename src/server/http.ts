@@ -251,7 +251,11 @@ async function handleHttpRequest(
 
     const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
     const state = options.activeSessions?.getSessionState(sessionId) ?? (await options.sessionService?.getSessionState?.(sessionId));
-    writeJson(response, 200, state ?? { session: { id: sessionId }, messages: [], tools: [], isStreaming: false, pendingMessageCount: 0 });
+    if (!state) {
+      writeJson(response, 404, { error: "session_not_found" });
+      return;
+    }
+    writeJson(response, 200, state);
     return;
   }
 
@@ -264,8 +268,7 @@ async function handleHttpRequest(
 
     const projectId = decodeURIComponent(projectSessionsMatch[1] ?? "");
     if (request.method === "POST") {
-      const session = await options.sessionService?.createProjectSession?.(projectId);
-      writeJson(response, 200, { session });
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
 

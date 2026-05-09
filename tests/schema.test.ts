@@ -6,10 +6,10 @@ describe("database schema", () => {
     const sql = createSchemaSql().join("\n");
 
     expect(sql).toContain("create table if not exists meta");
-    expect(sql).toContain("create table if not exists projects");
     expect(sql).toContain("create table if not exists devices");
     expect(sql).toContain("create table if not exists pairing_codes");
-    expect(sql).toContain("create table if not exists session_index");
+    expect(sql).not.toContain("create table if not exists projects");
+    expect(sql).not.toContain("create table if not exists session_index");
   });
 
   it("creates initial schema from version zero", () => {

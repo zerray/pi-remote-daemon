@@ -200,7 +200,7 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("creates a project session for authenticated devices", async () => {
+  it("does not create project sessions from the daemon", async () => {
     await withServer(
       async (baseUrl) => {
         const response = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
@@ -208,37 +208,24 @@ describe("daemon HTTP server", () => {
           headers: { authorization: "Bearer test-token" },
         });
 
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({
-          session: {
-            id: "sess_new",
-            piSessionId: "pi_new",
-            projectId: "proj_1",
-            name: null,
-            path: "/sessions/new.jsonl",
-            updatedAt: "2026-05-09T00:00:00.000Z",
-            messageCount: 0,
-          },
+        expect(response.status).toBe(405);
+        await expect(response.json()).resolves.toEqual({ error: "method_not_allowed" });
+      },
+      { authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("returns 404 for inactive sessions", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/missing`, {
+          headers: { authorization: "Bearer test-token" },
         });
+
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toEqual({ error: "session_not_found" });
       },
-      {
-        authenticateToken: (token) => token === "test-token",
-        sessionService: {
-          listProjectSessions: async () => [],
-          createProjectSession: async (projectId) => ({
-            id: "sess_new",
-            piSessionId: "pi_new",
-            projectId,
-            name: null,
-            path: "/sessions/new.jsonl",
-            updatedAt: "2026-05-09T00:00:00.000Z",
-            messageCount: 0,
-          }),
-          getSessionState: async () => {
-            throw new Error("not used");
-          },
-        },
-      },
+      { activeSessions: createActiveSessionRegistry(), authenticateToken: (token) => token === "test-token" },
     );
   });
 
