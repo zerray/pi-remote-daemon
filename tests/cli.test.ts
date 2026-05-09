@@ -16,6 +16,12 @@ describe("daemon CLI", () => {
         return { address: "127.0.0.1:9999", close: async () => undefined };
       },
       waitForShutdown: async () => undefined,
+      writeTextFile: async (path, content) => {
+        calls.push({ writeTextFile: path, content });
+      },
+      removeFile: async (path) => {
+        calls.push({ removeFile: path });
+      },
       writeLine: (line) => lines.push(line),
       env: { PI_REMOTE_DAEMON_DEV_TOKEN: "test-token" },
     };
@@ -31,6 +37,8 @@ describe("daemon CLI", () => {
           config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
         }),
       },
+      { writeTextFile: "/tmp/state/daemon.pid", content: `${process.pid}\n` },
+      { removeFile: "/tmp/state/daemon.pid" },
     ]);
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });

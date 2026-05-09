@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { defaultDaemonConfig, loadDaemonConfig } from "./config.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
@@ -13,6 +13,8 @@ export type CliDependencies = {
   startServer?: (options: StartServerOptions) => Promise<DaemonServer>;
   waitForShutdown?: () => Promise<void>;
   readTextFile?: (path: string) => Promise<string>;
+  writeTextFile?: (path: string, content: string) => Promise<void>;
+  removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
@@ -44,12 +46,15 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     config,
     authenticateToken: devToken ? (token) => token === devToken : undefined,
   });
+  const pidFile = join(stateDir, "daemon.pid");
+  await (deps.writeTextFile ?? writeFile)(pidFile, `${process.pid}\n`);
 
   (deps.writeLine ?? console.log)(`pi-remote-daemon listening on http://${server.address}`);
   if (devToken) (deps.writeLine ?? console.log)("dev token authentication is enabled");
 
   await (deps.waitForShutdown ?? waitForInterrupt)();
   await server.close();
+  await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
   return 0;
 }
 
