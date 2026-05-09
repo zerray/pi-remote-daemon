@@ -75,4 +75,19 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(lines).toEqual(["pi-remote-daemon is running (pid 1234)"]);
   });
+
+  it("reports stopped when stopping without a pid file", async () => {
+    const lines: string[] = [];
+    const code = await main(["stop", "--state-dir", "/tmp/state"], {
+      readTextFile: async () => {
+        const error = new Error("missing") as Error & { code: string };
+        error.code = "ENOENT";
+        throw error;
+      },
+      writeLine: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(lines).toEqual(["pi-remote-daemon is not running"]);
+  });
 });

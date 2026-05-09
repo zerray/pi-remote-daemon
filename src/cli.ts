@@ -24,6 +24,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   const command = argv[0];
   const env = deps.env ?? process.env;
   if (command === "status") return statusCommand(argv.slice(1), deps, env);
+  if (command === "stop") return stopCommand(argv.slice(1), deps, env);
   if (command !== "start") {
     (deps.writeLine ?? console.log)("Usage: pi-remote-daemon start|stop|status|pair [options]");
     return command === "--help" || command === "-h" ? 0 : 1;
@@ -56,6 +57,24 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   await server.close();
   await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(pidFile);
   return 0;
+}
+
+async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
+  const stateDir = parseStateDirArg(args) ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
+  const writeLine = deps.writeLine ?? console.log;
+  const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
+
+  try {
+    await readTextFile(join(stateDir, "daemon.pid"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      writeLine("pi-remote-daemon is not running");
+      return 1;
+    }
+    throw error;
+  }
+
+  throw new Error("stop running daemon is not implemented yet");
 }
 
 async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
