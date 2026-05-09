@@ -23,9 +23,13 @@ function stableHexId(input: string): string {
 }
 
 export function toSessionIndexRecord(project: ProjectRecord, piSession: PiSessionSummary): SessionIndexRecord {
-  // Convert a Pi SDK session listing item into a daemon session index record.
-  // Keep Pi transcript data as a file reference only.
-  void project;
-  void piSession;
-  throw new NotImplementedError("toSessionIndexRecord");
+  return {
+    id: daemonSessionIdForFile(piSession.sessionFile),
+    projectId: project.id,
+    piSessionId: piSession.piSessionId,
+    sessionFile: piSession.sessionFile,
+    nameCache: piSession.name,
+    updatedAt: piSession.updatedAt,
+    messageCountCache: piSession.messageCount,
+  };
 }
