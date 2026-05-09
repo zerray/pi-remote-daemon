@@ -29,4 +29,13 @@ describe("daemon HTTP server", () => {
       });
     });
   });
+
+  it("rejects unauthenticated project requests", async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/projects`);
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ error: "unauthorized" });
+    });
+  });
 });

@@ -12,6 +12,7 @@ export type StartServerOptions = {
   config: DaemonConfig;
   piVersion?: string;
   daemonVersion?: string;
+  authenticateToken?: (token: string) => boolean | Promise<boolean>;
 };
 
 export async function startDaemonServer(options: StartServerOptions): Promise<DaemonServer> {
@@ -52,7 +53,24 @@ async function handleHttpRequest(
     return;
   }
 
+  if (request.method === "GET" && request.url === "/v1/projects") {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    writeJson(response, 501, { error: "not_implemented" });
+    return;
+  }
+
   writeJson(response, 404, { error: "not_found" });
+}
+
+async function isAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) return false;
+  const token = authorization.slice("Bearer ".length);
+  return options.authenticateToken ? Boolean(await options.authenticateToken(token)) : false;
 }
 
 function parseBindAddress(bindAddress: string): { host: string; port: number } {
