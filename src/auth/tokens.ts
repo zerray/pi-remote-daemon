@@ -14,23 +14,18 @@ export function issueDeviceToken(): IssuedDeviceToken {
   return { rawToken, tokenHash: `scrypt:${salt}:${derived}` };
 }
 
-export async function hashDeviceToken(rawToken: string, salt?: string): Promise<string> {
-  // Generate or reuse a per-token salt.
-  // Derive a key with scrypt.
-  // Return an encoded string containing algorithm, salt, and derived key.
-  void rawToken;
-  void salt;
-  void scrypt;
-  void promisify;
-  throw new NotImplementedError("hashDeviceToken");
+export async function hashDeviceToken(rawToken: string, salt = randomBytes(16).toString("base64url")): Promise<string> {
+  const derive = promisify(scrypt) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
+  const derived = await derive(rawToken, salt, 32);
+  return `scrypt:${salt}:${derived.toString("base64url")}`;
 }
 
 export async function verifyDeviceToken(rawToken: string, encodedHash: string): Promise<boolean> {
-  // Parse the encoded hash.
-  // Re-hash the raw token with the stored salt.
-  // Compare derived keys with timingSafeEqual.
-  void rawToken;
-  void encodedHash;
-  void timingSafeEqual;
-  throw new NotImplementedError("verifyDeviceToken");
+  const [algorithm, salt, expected] = encodedHash.split(":");
+  if (algorithm !== "scrypt" || !salt || !expected) return false;
+
+  const actual = await hashDeviceToken(rawToken, salt);
+  const actualKey = Buffer.from(actual.split(":")[2] ?? "");
+  const expectedKey = Buffer.from(expected);
+  return actualKey.length === expectedKey.length && timingSafeEqual(actualKey, expectedKey);
 }
