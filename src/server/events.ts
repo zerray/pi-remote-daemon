@@ -23,12 +23,15 @@ export type PiToolExecutionEvent = {
 };
 
 export function summarizeToolArgs(toolName: string, args: unknown): string | undefined {
-  // For bash, show the command.
-  // For file tools, show the path.
-  // For unknown tools, return undefined to keep UI compact.
-  void toolName;
-  void args;
-  throw new NotImplementedError("summarizeToolArgs");
+  if (!args || typeof args !== "object") return undefined;
+  const record = args as Record<string, unknown>;
+
+  if (toolName === "bash" && typeof record.command === "string") return record.command;
+  if (["read", "write", "edit", "grep", "find", "ls"].includes(toolName) && typeof record.path === "string") {
+    return record.path;
+  }
+
+  return undefined;
 }
 
 export function toolStatusFromPiEvent(event: PiToolExecutionEvent, now: Date): ToolCallStatus {
