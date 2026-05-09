@@ -42,7 +42,7 @@ export function openDaemonStore(stateDir: string): DaemonStore {
       database
         .prepare("insert into devices (id, name, token_hash, created_at, last_seen_at, revoked_at) values (?, ?, ?, ?, null, null)")
         .run(deviceId, deviceName, token.tokenHash, now.toISOString());
-      return { deviceId, token: token.rawToken, daemonName: "pi-remote-daemon" };
+      return { deviceId, token: token.rawToken, daemonName: "pi-remote-control" };
     },
 
     async authenticateToken(rawToken: string): Promise<boolean> {

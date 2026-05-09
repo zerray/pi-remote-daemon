@@ -10,7 +10,7 @@ describe("daemon config", () => {
   });
 
   it("loads defaults when config.json does not exist", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-config-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-config-"));
     try {
       await expect(loadDaemonConfig(root)).resolves.toEqual({ bindAddress: DEFAULT_BIND_ADDRESS, allowedProjects: [] });
     } finally {
@@ -19,7 +19,7 @@ describe("daemon config", () => {
   });
 
   it("round-trips saved config", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-config-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-config-"));
     const config = {
       bindAddress: "100.64.0.1:17373",
       allowedProjects: [{ id: "proj_abc", name: "example", path: "/repo/example" }],

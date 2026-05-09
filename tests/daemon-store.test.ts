@@ -6,7 +6,7 @@ import { openDaemonStore } from "../src/persistence/daemon-store.js";
 
 describe("daemon store", () => {
   it("rejects duplicate pairing claims", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-store-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-store-"));
     try {
       const store = openDaemonStore(root);
       const pair = await store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000);
@@ -20,7 +20,7 @@ describe("daemon store", () => {
   });
 
   it("authenticates claimed device tokens", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-store-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-store-"));
     try {
       const store = openDaemonStore(root);
       const pair = await store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000);
@@ -35,7 +35,7 @@ describe("daemon store", () => {
   });
 
   it("creates and persists pairing codes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-store-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-store-"));
     try {
       const store = openDaemonStore(root);
       const pair = await store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000);
@@ -46,7 +46,7 @@ describe("daemon store", () => {
       reopened.close();
 
       expect(pair).toMatchObject({ pairCode: expect.stringMatching(/^\d{6}$/), expiresAt: "2026-05-09T00:01:00.000Z" });
-      expect(claimed).toMatchObject({ deviceId: expect.stringMatching(/^dev_/), token: expect.stringMatching(/^prd_/), daemonName: "pi-remote-daemon" });
+      expect(claimed).toMatchObject({ deviceId: expect.stringMatching(/^dev_/), token: expect.stringMatching(/^prd_/), daemonName: "pi-remote-control" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

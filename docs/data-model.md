@@ -2,10 +2,10 @@
 
 ## Persistent storage
 
-The daemon state directory defaults to `~/.pi/remote-daemon` and can be overridden with `PI_REMOTE_DAEMON_DIR`.
+The daemon state directory defaults to `~/.pi/remote-control` and can be overridden with `PI_REMOTE_CONTROL_DIR`.
 
 ```text
-~/.pi/remote-daemon/
+~/.pi/remote-control/
 ├── config.json
 ├── daemon.sqlite
 └── daemon.lock

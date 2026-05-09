@@ -1,4 +1,4 @@
-# Pi Remote Daemon
+# Pi Remote Control
 
 Private relay daemon for iOS remote control of explicitly enabled Pi TUI sessions.
 

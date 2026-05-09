@@ -36,7 +36,7 @@ describe("daemon CLI", () => {
         calls.push({ removeFile: path });
       },
       writeLine: (line) => lines.push(line),
-      env: { PI_REMOTE_DAEMON_DEV_TOKEN: "test-token" },
+      env: { PI_REMOTE_CONTROL_DEV_TOKEN: "test-token" },
     };
 
     const code = await main(["start", "--state-dir", "/tmp/state", "--bind", "127.0.0.1:0"], deps);
@@ -54,11 +54,11 @@ describe("daemon CLI", () => {
       },
       { releaseLock: true },
     ]);
-    expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
+    expect(lines).toContain("pi-remote-control listening on http://127.0.0.1:9999");
   });
 
   it("creates config.json on first real start", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-cli-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-cli-"));
     try {
       const code = await main(["start", "--state-dir", root], {
         openStore: () => ({
@@ -130,7 +130,7 @@ describe("daemon CLI", () => {
 
     expect(code).toBe(1);
     expect(calls).toEqual([{ acquireLock: "/tmp/state" }]);
-    expect(lines).toEqual(["pi-remote-daemon is already running"]);
+    expect(lines).toEqual(["pi-remote-control is already running"]);
   });
 
   it("starts with persistent store authentication and pairing", async () => {
@@ -151,7 +151,7 @@ describe("daemon CLI", () => {
           close: () => calls.push({ closeStore: true }),
           authenticateToken: async (token) => token === "stored-token",
           createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
-          claimPairingCode: async () => ({ deviceId: "dev_1", token: "prd_1", daemonName: "pi-remote-daemon" }),
+          claimPairingCode: async () => ({ deviceId: "dev_1", token: "prd_1", daemonName: "pi-remote-control" }),
         };
       },
       startServer: async (options) => {
@@ -194,7 +194,7 @@ describe("daemon CLI", () => {
     const code = await main(["status"], deps);
 
     expect(code).toBe(1);
-    expect(lines).toEqual(["pi-remote-daemon is stopped"]);
+    expect(lines).toEqual(["pi-remote-control is stopped"]);
   });
 
   it("reports running status from lock file", async () => {
@@ -209,7 +209,7 @@ describe("daemon CLI", () => {
     });
 
     expect(code).toBe(0);
-    expect(lines).toEqual(["pi-remote-daemon is running (pid 1234)"]);
+    expect(lines).toEqual(["pi-remote-control is running (pid 1234)"]);
   });
 
   it("reports stopped when stopping without a lock file", async () => {
@@ -224,7 +224,7 @@ describe("daemon CLI", () => {
     });
 
     expect(code).toBe(1);
-    expect(lines).toEqual(["pi-remote-daemon is not running"]);
+    expect(lines).toEqual(["pi-remote-control is not running"]);
   });
 
   it("removes stale lock when stopping a missing process", async () => {
@@ -243,7 +243,7 @@ describe("daemon CLI", () => {
 
     expect(code).toBe(0);
     expect(calls).toEqual([{ removeFile: "/tmp/state/daemon.lock" }]);
-    expect(lines).toEqual(["pi-remote-daemon stale lock removed (pid 1234)"]);
+    expect(lines).toEqual(["pi-remote-control stale lock removed (pid 1234)"]);
   });
 
   it("stops a running daemon from its lock file", async () => {
@@ -265,14 +265,14 @@ describe("daemon CLI", () => {
       { sendSignal: 1234, signal: "SIGTERM" },
       { removeFile: "/tmp/state/daemon.lock" },
     ]);
-    expect(lines).toEqual(["pi-remote-daemon stop requested (pid 1234)"]);
+    expect(lines).toEqual(["pi-remote-control stop requested (pid 1234)"]);
   });
 
   it("requests and prints a pairing code", async () => {
     const lines: string[] = [];
     const requests: unknown[] = [];
     const code = await main(["pair", "--base-url", "http://127.0.0.1:9999"], {
-      env: { PI_REMOTE_DAEMON_DEV_TOKEN: "test-token" },
+      env: { PI_REMOTE_CONTROL_DEV_TOKEN: "test-token" },
       fetchJson: async (url, init) => {
         requests.push({ url, init });
         return { pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" };

@@ -12,7 +12,7 @@ The daemon should be installable as part of a Pi package so users can manage it 
 
 # Decision
 
-Distribute `pi-remote-daemon` as a Pi package containing both a daemon binary and a Pi extension. The extension is a thin control shim that registers commands for status, start, stop, and pairing. The daemon server runs as a separate singleton process started by an OS service, manual CLI, or explicit extension command.
+Distribute `pi-remote-control` as a Pi package containing both a daemon binary and a Pi extension. The extension is a thin control shim that registers commands for status, start, stop, and pairing. The daemon server runs as a separate singleton process started by an OS service, manual CLI, or explicit extension command.
 
 # Consequences
 

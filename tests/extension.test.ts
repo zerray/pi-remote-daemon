@@ -39,14 +39,14 @@ function createContext() {
   };
 }
 
-describe("remote daemon extension", () => {
-  it("registers the remote-daemon command", () => {
+describe("remote control extension", () => {
+  it("registers the remote-control command", () => {
     const { pi, commands } = createFakePi();
 
     remoteDaemonExtension(pi as never);
 
-    expect(commands.map((command) => command.name)).toEqual(["remote-daemon"]);
-    expect(commands[0]?.description).toContain("Pi remote daemon");
+    expect(commands.map((command) => command.name)).toEqual(["remote-control"]);
+    expect(commands[0]?.description).toContain("Pi remote control");
   });
 
   it("runs status through the daemon CLI", async () => {
@@ -73,7 +73,7 @@ describe("remote daemon extension", () => {
       },
       exec: async (command: string, args: string[]) => {
         execCalls.push({ command, args });
-        if (args.includes("status")) return { stdout: "pi-remote-daemon is stopped\n", stderr: "", code: 1, killed: false };
+        if (args.includes("status")) return { stdout: "pi-remote-control is stopped\n", stderr: "", code: 1, killed: false };
         return { stdout: "", stderr: "", code: 0, killed: false };
       },
     };
@@ -86,7 +86,7 @@ describe("remote daemon extension", () => {
     expect(execCalls[1]?.args).toHaveLength(2);
     expect(execCalls[1]?.args[1]).toContain("'start' '--bind' '127.0.0.1:17373'");
     expect(execCalls[1]?.args[1]).toContain("&");
-    expect(notifications).toEqual([{ message: "pi-remote-daemon start requested", type: "info" }]);
+    expect(notifications).toEqual([{ message: "pi-remote-control start requested", type: "info" }]);
   });
 
   it("does not start daemon when status says it is already running", async () => {
@@ -99,7 +99,7 @@ describe("remote daemon extension", () => {
       },
       exec: async (command: string, args: string[]) => {
         execCalls.push({ command, args });
-        return { stdout: "pi-remote-daemon is running (pid 1234)\n", stderr: "", code: 0, killed: false };
+        return { stdout: "pi-remote-control is running (pid 1234)\n", stderr: "", code: 0, killed: false };
       },
     };
     remoteDaemonExtension(pi as never);
@@ -111,7 +111,7 @@ describe("remote daemon extension", () => {
     expect(execCalls).toEqual([
       { command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] },
     ]);
-    expect(notifications).toEqual([{ message: "pi-remote-daemon is running (pid 1234)", type: "warning" }]);
+    expect(notifications).toEqual([{ message: "pi-remote-control is running (pid 1234)", type: "warning" }]);
   });
 
   it("shows daemon CLI failures as errors", async () => {
@@ -139,7 +139,7 @@ describe("remote daemon extension", () => {
       registerCommand(name: string, options: Omit<Registered, "name">) {
         commands.push({ name, ...options });
       },
-      exec: async () => ({ stdout: "pi-remote-daemon is stopped\n", stderr: "", code: 1, killed: false }),
+      exec: async () => ({ stdout: "pi-remote-control is stopped\n", stderr: "", code: 1, killed: false }),
     };
     remoteDaemonExtension(pi as never);
 
@@ -147,6 +147,6 @@ describe("remote daemon extension", () => {
       ui: { notify: (message, type) => notifications.push({ message, type }) },
     });
 
-    expect(notifications).toEqual([{ message: "pi-remote-daemon is stopped", type: "warning" }]);
+    expect(notifications).toEqual([{ message: "pi-remote-control is stopped", type: "warning" }]);
   });
 });

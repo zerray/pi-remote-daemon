@@ -6,7 +6,7 @@ import { acquireDaemonLock } from "../src/lock.js";
 
 describe("daemon lock", () => {
   it("creates and releases daemon.lock", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-lock-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-lock-"));
     try {
       const lock = await acquireDaemonLock(root, 1234);
 
@@ -21,7 +21,7 @@ describe("daemon lock", () => {
   });
 
   it("returns undefined when daemon.lock already exists", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-lock-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-lock-"));
     try {
       const first = await acquireDaemonLock(root, 1234);
       const second = await acquireDaemonLock(root, 5678);

@@ -11,7 +11,7 @@ async function withServer<T>(
   overrides: Partial<StartServerOptions> = {},
 ): Promise<T> {
   const server = await startDaemonServer({
-    stateDir: "/tmp/pi-remote-daemon-test",
+    stateDir: "/tmp/pi-remote-control-test",
     config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
     piVersion: "pi-test",
     daemonVersion: "daemon-test",
@@ -336,7 +336,7 @@ describe("daemon HTTP server", () => {
   });
 
   it("issues usable bearer tokens through the pair flow", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-pair-http-"));
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-pair-http-"));
     const store = openDaemonStore(root);
     try {
       await withServer(

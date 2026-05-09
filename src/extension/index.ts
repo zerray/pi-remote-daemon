@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function remoteDaemonExtension(pi: ExtensionAPI): void {
-  pi.registerCommand("remote-daemon", {
-    description: "Control the Pi remote daemon",
+  pi.registerCommand("remote-control", {
+    description: "Control the Pi remote control",
     handler: async (args, ctx) => {
       const commandArgs = splitArgs(args.trim() || "status");
       const cli = cliCommand();
@@ -13,22 +13,22 @@ export default function remoteDaemonExtension(pi: ExtensionAPI): void {
         const status = await pi.exec(cli.command, [...cli.args, "status"]);
         const statusOutput = status.stdout.trim();
         if (status.code === 0) {
-          ctx.ui.notify(statusOutput || "pi-remote-daemon is already running", "warning");
+          ctx.ui.notify(statusOutput || "pi-remote-control is already running", "warning");
           return;
         }
 
         const shellLine = `${shellQuote(cli.command)} ${[...cli.args, ...commandArgs]
           .map(shellQuote)
-          .join(" ")} >/tmp/pi-remote-daemon.log 2>&1 &`;
+          .join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
         await pi.exec("sh", ["-lc", shellLine]);
-        ctx.ui.notify("pi-remote-daemon start requested", "info");
+        ctx.ui.notify("pi-remote-control start requested", "info");
         return;
       }
 
       const result = await pi.exec(cli.command, [...cli.args, ...commandArgs]);
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
-      const output = stdout || stderr || `pi-remote-daemon ${commandArgs.join(" ")} exited ${result.code}`;
+      const output = stdout || stderr || `pi-remote-control ${commandArgs.join(" ")} exited ${result.code}`;
       const type = result.code === 0 ? "info" : stdout ? "warning" : "error";
       ctx.ui.notify(output, type);
     },
@@ -44,7 +44,7 @@ function cliCommand(): { command: string; args: string[] } {
   const distCli = resolve(packageRoot, "dist", "cli.js");
   if (existsSync(distCli)) return { command: process.execPath, args: [distCli] };
 
-  return { command: "pi-remote-daemon", args: [] };
+  return { command: "pi-remote-control", args: [] };
 }
 
 function splitArgs(input: string): string[] {

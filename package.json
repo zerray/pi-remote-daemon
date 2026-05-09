@@ -1,11 +1,11 @@
 {
-  "name": "pi-remote-daemon",
+  "name": "pi-remote-control",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Authenticated remote daemon for Pi sessions.",
+  "description": "Authenticated remote control for Pi sessions.",
   "bin": {
-    "pi-remote-daemon": "./src/cli-runner.cjs"
+    "pi-remote-control": "./src/cli-runner.cjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

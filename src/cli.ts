@@ -34,7 +34,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   if (command === "stop") return stopCommand(argv.slice(1), deps, env);
   if (command === "pair") return pairCommand(argv.slice(1), deps, env);
   if (command !== "start") {
-    (deps.writeLine ?? console.log)("Usage: pi-remote-daemon start|stop|status|pair [options]");
+    (deps.writeLine ?? console.log)("Usage: pi-remote-control start|stop|status|pair [options]");
     return command === "--help" || command === "-h" ? 0 : 1;
   }
 
@@ -44,7 +44,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
 
   const lock = await (deps.acquireLock ?? acquireDaemonLock)(stateDir);
   if (!lock) {
-    (deps.writeLine ?? console.log)("pi-remote-daemon is already running");
+    (deps.writeLine ?? console.log)("pi-remote-control is already running");
     return 1;
   }
 
@@ -58,7 +58,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   });
   await (deps.saveConfig ?? saveDaemonConfig)(stateDir, loadedConfig);
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
-  const devToken = env.PI_REMOTE_DAEMON_DEV_TOKEN;
+  const devToken = env.PI_REMOTE_CONTROL_DEV_TOKEN;
   const store = (deps.openStore ?? openDaemonStore)(stateDir);
   const server = await (deps.startServer ?? startDaemonServer)({
     stateDir,
@@ -74,7 +74,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
       },
     },
   });
-  (deps.writeLine ?? console.log)(`pi-remote-daemon listening on http://${server.address}`);
+  (deps.writeLine ?? console.log)(`pi-remote-control listening on http://${server.address}`);
   if (devToken) (deps.writeLine ?? console.log)("dev token authentication is enabled");
 
   await (deps.waitForShutdown ?? waitForInterrupt)();
@@ -85,8 +85,8 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
 }
 
 async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
-  const baseUrl = parseBaseUrlArg(args) ?? env.PI_REMOTE_DAEMON_URL ?? "http://127.0.0.1:17373";
-  const token = env.PI_REMOTE_DAEMON_DEV_TOKEN;
+  const baseUrl = parseBaseUrlArg(args) ?? env.PI_REMOTE_CONTROL_URL ?? "http://127.0.0.1:17373";
+  const token = env.PI_REMOTE_CONTROL_DEV_TOKEN;
   const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
   const result = (await (deps.fetchJson ?? fetchJson)(`${baseUrl}/v1/pair/code`, { method: "POST", headers })) as {
     pairCode?: string;
@@ -107,16 +107,16 @@ async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
     const pid = Number.parseInt((await readTextFile(lockFile)).trim(), 10);
     try {
       (deps.sendSignal ?? process.kill)(pid, "SIGTERM");
-      writeLine(`pi-remote-daemon stop requested (pid ${pid})`);
+      writeLine(`pi-remote-control stop requested (pid ${pid})`);
     } catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ESRCH")) throw error;
-      writeLine(`pi-remote-daemon stale lock removed (pid ${pid})`);
+      writeLine(`pi-remote-control stale lock removed (pid ${pid})`);
     }
     await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(lockFile);
     return 0;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      writeLine("pi-remote-daemon is not running");
+      writeLine("pi-remote-control is not running");
       return 1;
     }
     throw error;
@@ -131,11 +131,11 @@ async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.
   try {
     const pid = Number.parseInt((await readTextFile(join(stateDir, "daemon.lock"))).trim(), 10);
     const running = (deps.isProcessRunning ?? isProcessRunning)(pid);
-    writeLine(running ? `pi-remote-daemon is running (pid ${pid})` : "pi-remote-daemon is stopped");
+    writeLine(running ? `pi-remote-control is running (pid ${pid})` : "pi-remote-control is stopped");
     return running ? 0 : 1;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      writeLine("pi-remote-daemon is stopped");
+      writeLine("pi-remote-control is stopped");
       return 1;
     }
     throw error;

@@ -8,7 +8,7 @@ Accepted
 
 # Context
 
-The daemon can be started manually through the CLI or from Pi with `/remote-daemon start`. OS service installation through launchd or systemd would make the daemon persistent across logins and reboots, but it adds platform-specific service files, permissions, logging behavior, uninstall logic, and debugging surface.
+The daemon can be started manually through the CLI or from Pi with `/remote-control start`. OS service installation through launchd or systemd would make the daemon persistent across logins and reboots, but it adds platform-specific service files, permissions, logging behavior, uninstall logic, and debugging surface.
 
 # Decision
 

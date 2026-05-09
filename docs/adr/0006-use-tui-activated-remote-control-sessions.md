@@ -21,4 +21,4 @@ The Pi command surface changes to two explicit commands:
 
 # Consequences
 
-The remote API reflects user-selected live TUI sessions rather than all saved Pi sessions or configured project roots. The daemon no longer competes with the TUI for session file ownership or runtime control. If a TUI process exits, reloads, or disables remote control, that session disappears from the iOS app. The previous `/remote-daemon` control-shim command shape and daemon-owned Pi runtime model are superseded.
+The remote API reflects user-selected live TUI sessions rather than all saved Pi sessions or configured project roots. The daemon no longer competes with the TUI for session file ownership or runtime control. If a TUI process exits, reloads, or disables remote control, that session disappears from the iOS app. The previous `/remote-control` control-shim command shape and daemon-owned Pi runtime model are superseded.

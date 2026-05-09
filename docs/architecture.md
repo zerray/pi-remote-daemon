@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`pi-remote-daemon` is a long-lived local relay service that exposes authenticated, Tailscale-reachable remote control for Pi TUI sessions that the user explicitly enables. It is distributed as a Pi package, but the daemon process itself is not a Pi extension runtime.
+`pi-remote-control` is a long-lived local relay service that exposes authenticated, Tailscale-reachable remote control for Pi TUI sessions that the user explicitly enables. It is distributed as a Pi package, but the daemon process itself is not a Pi extension runtime.
 
 ## Pi package shape
 
@@ -18,7 +18,7 @@ The extension must not host the daemon server in-process. Pi extensions are load
 The daemon is started by one of these explicit singleton mechanisms:
 
 1. Manual CLI:
-   - `pi-remote-daemon start`.
+   - `pi-remote-control start`.
 2. Pi extension commands:
    - `/remote-control` starts the daemon if needed before enabling the current TUI session.
    - `/remote-control-pair` starts the daemon if needed before creating a pair code.
@@ -69,7 +69,7 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 
 ## Persistence model
 
-The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-daemon` and overridable with `PI_REMOTE_DAEMON_DIR`.
+The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 
 Durable daemon-owned files:
 

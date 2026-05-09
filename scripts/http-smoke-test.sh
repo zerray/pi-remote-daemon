@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:17373}"
-TOKEN="${TOKEN:-${PI_REMOTE_DAEMON_DEV_TOKEN:-}}"
+TOKEN="${TOKEN:-${PI_REMOTE_CONTROL_DEV_TOKEN:-}}"
 PROJECT_ID="${PROJECT_ID:-}"
 SESSION_ID="${SESSION_ID:-}"
 PAIR_CODE="${PAIR_CODE:-}"
@@ -45,7 +45,7 @@ fi
 if [[ -z "${TOKEN}" ]]; then
   echo
   echo "TOKEN is not set; skipping authenticated endpoints."
-  echo "For local dev, start the server with PI_REMOTE_DAEMON_DEV_TOKEN=test-token and run TOKEN=test-token $0"
+  echo "For local dev, start the server with PI_REMOTE_CONTROL_DEV_TOKEN=test-token and run TOKEN=test-token $0"
   exit 0
 fi
 
