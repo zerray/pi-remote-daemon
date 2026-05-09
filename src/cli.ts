@@ -145,11 +145,18 @@ async function statusCommand(args: string[], deps: CliDependencies, env: NodeJS.
   const writeLine = deps.writeLine ?? console.log;
   const readTextFile = deps.readTextFile ?? ((path: string) => readFile(path, "utf8"));
 
+  const lockFile = join(stateDir, "daemon.lock");
   try {
-    const pid = Number.parseInt((await readTextFile(join(stateDir, "daemon.lock"))).trim(), 10);
+    const pid = Number.parseInt((await readTextFile(lockFile)).trim(), 10);
     const running = (deps.isProcessRunning ?? isProcessRunning)(pid);
-    writeLine(running ? `pi-remote-control is running (pid ${pid})` : "pi-remote-control is stopped");
-    return running ? 0 : 1;
+    if (running) {
+      writeLine(`pi-remote-control is running (pid ${pid})`);
+      return 0;
+    }
+
+    await (deps.removeFile ?? ((path: string) => rm(path, { force: true })))(lockFile);
+    writeLine(`pi-remote-control is stopped (stale lock removed, pid ${pid})`);
+    return 1;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       writeLine("pi-remote-control is stopped");
