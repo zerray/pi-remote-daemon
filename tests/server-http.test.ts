@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import WebSocket from "ws";
 import { describe, expect, it } from "vitest";
+import { openDaemonStore } from "../src/persistence/daemon-store.js";
 import { startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
 async function withServer<T>(
@@ -307,6 +311,48 @@ describe("daemon HTTP server", () => {
         },
       },
     );
+  });
+
+  it("issues usable bearer tokens through the pair flow", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-pair-http-"));
+    const store = openDaemonStore(root);
+    try {
+      await withServer(
+        async (baseUrl) => {
+          const codeResponse = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
+          const codeBody = (await codeResponse.json()) as { pairCode: string };
+
+          const claimResponse = await fetch(`${baseUrl}/v1/pair/claim`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ pairCode: codeBody.pairCode, deviceName: "iPhone" }),
+          });
+          const claimBody = (await claimResponse.json()) as { token: string };
+
+          const projectsResponse = await fetch(`${baseUrl}/v1/projects`, {
+            headers: { authorization: `Bearer ${claimBody.token}` },
+          });
+
+          expect(codeResponse.status).toBe(200);
+          expect(claimResponse.status).toBe(200);
+          expect(projectsResponse.status).toBe(200);
+        },
+        {
+          authenticateToken: (token) => store.authenticateToken(token),
+          pairService: {
+            createPairingCode: () => store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000),
+            claimPairingCode: async (request) => {
+              const claimed = await store.claimPairingCode(request.pairCode, request.deviceName, new Date("2026-05-09T00:00:30.000Z"));
+              if (!claimed) throw new Error("invalid pair code");
+              return claimed;
+            },
+          },
+        },
+      );
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("claims pairing codes without bearer auth", async () => {

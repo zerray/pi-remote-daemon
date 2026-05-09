@@ -235,8 +235,8 @@ async function handleUpgrade(
 }
 
 async function canCreatePairingCode(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
-  if (await isAuthorized(request, options)) return true;
-  return !options.authenticateToken && isLoopbackBindAddress(options.config.bindAddress);
+  if (isLoopbackBindAddress(options.config.bindAddress)) return true;
+  return isAuthorized(request, options);
 }
 
 function isLoopbackBindAddress(bindAddress: string): boolean {
