@@ -4,15 +4,15 @@ Private relay daemon for iOS remote control of explicitly enabled Pi TUI session
 
 ## Run
 
+Install as a Pi package:
+
 ```bash
-npm install
-npm run build
-node dist/cli.js start --bind 127.0.0.1:17373
-node dist/cli.js status
-node dist/cli.js stop
+pi install ./pi-remote-control          # from this repository's parent directory
+# or, from this package directory:
+pi install .
 ```
 
-From Pi TUI after installing the package:
+After installation, open a Pi TUI session and run:
 
 ```text
 /remote-control-pair  # display QR code for iOS pairing
