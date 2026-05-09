@@ -1,6 +1,5 @@
 import { randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { NotImplementedError } from "../errors.js";
 
 export type IssuedDeviceToken = {
   rawToken: string;

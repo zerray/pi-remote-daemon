@@ -1,5 +1,3 @@
-import { NotImplementedError } from "../errors.js";
-
 export const SCHEMA_VERSION = 1;
 
 export function createSchemaSql(): string[] {

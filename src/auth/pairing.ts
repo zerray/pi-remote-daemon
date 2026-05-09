@@ -1,5 +1,4 @@
 import { randomInt, createHash, timingSafeEqual } from "node:crypto";
-import { NotImplementedError } from "../errors.js";
 import type { PairingCode } from "../types.js";
 
 export type CreatedPairingCode = PairingCode & {

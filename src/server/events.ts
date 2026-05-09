@@ -1,4 +1,3 @@
-import { NotImplementedError } from "../errors.js";
 import type { ToolCallStatus, ToolCallStatusValue } from "../types.js";
 
 export type AssistantDeltaEvent = {

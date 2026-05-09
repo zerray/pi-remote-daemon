@@ -1,7 +1,6 @@
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { chmod, mkdir } from "node:fs/promises";
-import { NotImplementedError } from "./errors.js";
 
 export type StateDirOptions = {
   env?: NodeJS.ProcessEnv;

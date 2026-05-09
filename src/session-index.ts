@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { NotImplementedError } from "./errors.js";
 import type { ProjectRecord, SessionIndexRecord } from "./types.js";
 
 export type PiSessionSummary = {

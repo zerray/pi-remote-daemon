@@ -1,6 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { NotImplementedError } from "./errors.js";
 import type { DaemonConfig } from "./types.js";
 
 export const DEFAULT_BIND_ADDRESS = "127.0.0.1:17373";
