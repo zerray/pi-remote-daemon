@@ -11,6 +11,10 @@ describe("daemon CLI", () => {
         calls.push({ ensureStateDir: stateDir });
       },
       loadConfig: async () => ({ bindAddress: "127.0.0.1:17373", allowedProjects: [] }),
+      acquireLock: async (stateDir) => {
+        calls.push({ acquireLock: stateDir });
+        return { path: `${stateDir}/daemon.lock`, release: async () => calls.push({ releaseLock: true }) };
+      },
       startServer: async (options) => {
         calls.push({ startServer: options });
         return { address: "127.0.0.1:9999", close: async () => undefined };
@@ -37,6 +41,7 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(calls).toEqual([
       { ensureStateDir: "/tmp/state" },
+      { acquireLock: "/tmp/state" },
       {
         startServer: expect.objectContaining({
           stateDir: "/tmp/state",
@@ -45,6 +50,7 @@ describe("daemon CLI", () => {
       },
       { writeTextFile: "/tmp/state/daemon.pid", content: `${process.pid}\n` },
       { removeFile: "/tmp/state/daemon.pid" },
+      { releaseLock: true },
     ]);
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
   });
@@ -78,6 +84,10 @@ describe("daemon CLI", () => {
       getStateDir: () => "/tmp/state",
       ensureStateDir: async () => undefined,
       loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      acquireLock: async (stateDir) => {
+        calls.push({ acquireLock: stateDir });
+        return { path: `${stateDir}/daemon.lock`, release: async () => calls.push({ releaseLock: true }) };
+      },
       openStore: (stateDir) => {
         calls.push({ openStore: stateDir });
         return {
@@ -98,7 +108,7 @@ describe("daemon CLI", () => {
     });
 
     expect(code).toBe(0);
-    expect(calls).toEqual([{ openStore: "/tmp/state" }, { closeStore: true }]);
+    expect(calls).toEqual([{ acquireLock: "/tmp/state" }, { openStore: "/tmp/state" }, { closeStore: true }, { releaseLock: true }]);
     await expect(startOptions?.authenticateToken?.("stored-token")).resolves.toBe(true);
     await expect(startOptions?.pairService?.createPairingCode?.()).resolves.toEqual({
       pairCode: "123456",
