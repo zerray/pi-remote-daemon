@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { main, type CliDependencies } from "../src/cli.js";
 
@@ -57,6 +60,28 @@ describe("daemon CLI", () => {
       { releaseLock: true },
     ]);
     expect(lines).toContain("pi-remote-daemon listening on http://127.0.0.1:9999");
+  });
+
+  it("creates config.json on first real start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-daemon-cli-"));
+    try {
+      const code = await main(["start", "--state-dir", root], {
+        openStore: () => ({
+          close: () => undefined,
+          authenticateToken: async () => false,
+          createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+          claimPairingCode: async () => undefined,
+        }),
+        startServer: async () => ({ address: "127.0.0.1:9999", close: async () => undefined }),
+        waitForShutdown: async () => undefined,
+        writeLine: () => undefined,
+      });
+
+      expect(code).toBe(0);
+      await expect(readFile(join(root, "config.json"), "utf8")).resolves.toContain("127.0.0.1:17373");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("writes default config when config file is missing", async () => {
