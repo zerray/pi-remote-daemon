@@ -271,8 +271,46 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("accepts authenticated prompts", async () => {
-    const prompts: unknown[] = [];
+  it("lets TUI extensions take queued remote commands", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    activeSessions.enqueueCommand("sess_1", { type: "remote_abort", requestId: "req_1" });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`);
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ commands: [{ type: "remote_abort", requestId: "req_1" }] });
+
+        const emptyResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/commands`);
+        await expect(emptyResponse.json()).resolves.toEqual({ commands: [] });
+      },
+      { activeSessions },
+    );
+  });
+
+  it("queues prompts for active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
     await withServer(
       async (baseUrl) => {
         const response = await fetch(`${baseUrl}/v1/sessions/sess_1/prompt`, {
@@ -283,21 +321,43 @@ describe("daemon HTTP server", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ accepted: true });
-        expect(prompts).toEqual([{ sessionId: "sess_1", text: "hello", streamingBehavior: "followUp" }]);
+        expect(activeSessions.takeCommands("sess_1")).toEqual([
+          { type: "remote_prompt", requestId: expect.stringMatching(/^req_/), text: "hello", streamingBehavior: "followUp" },
+        ]);
       },
-      {
-        authenticateToken: (token) => token === "test-token",
-        sessionService: {
-          promptSession: async (sessionId, request) => {
-            prompts.push({ sessionId, ...request });
-          },
-        },
-      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
   });
 
-  it("aborts authenticated sessions", async () => {
-    const aborted: string[] = [];
+  it("rejects prompts for inactive TUI sessions", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/missing/prompt`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ text: "hello" }),
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "session_not_active" });
+      },
+      { activeSessions: createActiveSessionRegistry(), authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("queues abort for active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: true,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
     await withServer(
       async (baseUrl) => {
         const response = await fetch(`${baseUrl}/v1/sessions/sess_1/abort`, {
@@ -307,16 +367,9 @@ describe("daemon HTTP server", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ aborted: true });
-        expect(aborted).toEqual(["sess_1"]);
+        expect(activeSessions.takeCommands("sess_1")).toEqual([{ type: "remote_abort", requestId: expect.stringMatching(/^req_/) }]);
       },
-      {
-        authenticateToken: (token) => token === "test-token",
-        sessionService: {
-          abortSession: async (sessionId) => {
-            aborted.push(sessionId);
-          },
-        },
-      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
   });
 

@@ -35,6 +35,25 @@ describe("active TUI session registry", () => {
     expect(registry.listProjectSessions("proj_1")).toEqual([]);
   });
 
+  it("queues remote commands for active TUI sessions", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.enqueueCommand("sess_1", { type: "remote_abort", requestId: "req_1" })).toBe(true);
+    expect(registry.enqueueCommand("missing", { type: "remote_abort", requestId: "req_2" })).toBe(false);
+    expect(registry.takeCommands("sess_1")).toEqual([{ type: "remote_abort", requestId: "req_1" }]);
+    expect(registry.takeCommands("sess_1")).toEqual([]);
+  });
+
   it("returns snapshots for active sessions", () => {
     const registry = createActiveSessionRegistry();
     registry.registerSession({

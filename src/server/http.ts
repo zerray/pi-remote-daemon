@@ -139,6 +139,13 @@ async function handleHttpRequest(
     return;
   }
 
+  const tuiCommandsMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
+  if (request.method === "GET" && tuiCommandsMatch) {
+    const sessionId = decodeURIComponent(tuiCommandsMatch[1] ?? "");
+    writeJson(response, 200, { commands: options.activeSessions?.takeCommands(sessionId) ?? [] });
+    return;
+  }
+
   const tuiEventMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
   if (request.method === "POST" && tuiEventMatch) {
     const sessionId = decodeURIComponent(tuiEventMatch[1] ?? "");
@@ -181,7 +188,14 @@ async function handleHttpRequest(
     }
 
     const sessionId = decodeURIComponent(abortMatch[1] ?? "");
-    await options.sessionService?.abortSession?.(sessionId);
+    if (options.activeSessions) {
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_abort", requestId: nextRequestId() })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    } else {
+      await options.sessionService?.abortSession?.(sessionId);
+    }
     writeJson(response, 200, { aborted: true });
     return;
   }
@@ -195,7 +209,19 @@ async function handleHttpRequest(
 
     const sessionId = decodeURIComponent(promptMatch[1] ?? "");
     const body = (await readJsonBody(request)) as PromptSessionRequest;
-    await options.sessionService?.promptSession?.(sessionId, body);
+    if (options.activeSessions) {
+      if (!options.activeSessions.enqueueCommand(sessionId, {
+        type: "remote_prompt",
+        requestId: nextRequestId(),
+        text: body.text,
+        streamingBehavior: body.streamingBehavior,
+      })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    } else {
+      await options.sessionService?.promptSession?.(sessionId, body);
+    }
     writeJson(response, 200, { accepted: true });
     return;
   }
@@ -278,6 +304,10 @@ async function isAuthorized(request: IncomingMessage, options: StartServerOption
   if (!authorization?.startsWith("Bearer ")) return false;
   const token = authorization.slice("Bearer ".length);
   return options.authenticateToken ? Boolean(await options.authenticateToken(token)) : false;
+}
+
+function nextRequestId(): string {
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function parseBindAddress(bindAddress: string): { host: string; port: number } {

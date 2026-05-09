@@ -38,6 +38,10 @@ export type ChatMessage = {
   isStreaming: boolean;
 };
 
+export type RemoteTuiCommand =
+  | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
+  | { type: "remote_abort"; requestId: string };
+
 export type ActiveSessionState = {
   session: ActiveSessionSummary;
   messages: ChatMessage[];
@@ -52,6 +56,8 @@ export type ActiveSessionRegistry = {
   listProjects(): ActiveProject[];
   listProjectSessions(projectId: string): ActiveSessionSummary[];
   getSessionState(sessionId: string): ActiveSessionState | undefined;
+  enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
+  takeCommands(sessionId: string): RemoteTuiCommand[];
 };
 
 type StoredActiveSession = ActiveSessionRegistration & {
@@ -59,6 +65,7 @@ type StoredActiveSession = ActiveSessionRegistration & {
   messages: ChatMessage[];
   tools: ToolCallStatus[];
   pendingMessageCount: number;
+  commands: RemoteTuiCommand[];
 };
 
 export function createActiveSessionRegistry(): ActiveSessionRegistry {
@@ -67,7 +74,7 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
   return {
     registerSession(session) {
       const summary = toSummary(session);
-      sessions.set(session.id, { ...session, summary, messages: [], tools: [], pendingMessageCount: 0 });
+      sessions.set(session.id, { ...session, summary, messages: [], tools: [], pendingMessageCount: 0, commands: [] });
       return summary;
     },
 
@@ -98,6 +105,21 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
         isStreaming: session.isStreaming,
         pendingMessageCount: session.pendingMessageCount,
       };
+    },
+
+    enqueueCommand(sessionId, command) {
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      session.commands.push(command);
+      return true;
+    },
+
+    takeCommands(sessionId) {
+      const session = sessions.get(sessionId);
+      if (!session) return [];
+      const commands = session.commands;
+      session.commands = [];
+      return commands;
     },
   };
 }
