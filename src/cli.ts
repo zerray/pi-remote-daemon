@@ -56,6 +56,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     }
     throw error;
   });
+  await (deps.saveConfig ?? saveDaemonConfig)(stateDir, loadedConfig);
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
   const devToken = env.PI_REMOTE_DAEMON_DEV_TOKEN;
   const store = (deps.openStore ?? openDaemonStore)(stateDir);

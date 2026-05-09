@@ -11,6 +11,9 @@ describe("daemon CLI", () => {
         calls.push({ ensureStateDir: stateDir });
       },
       loadConfig: async () => ({ bindAddress: "127.0.0.1:17373", allowedProjects: [] }),
+      saveConfig: async (stateDir, config) => {
+        calls.push({ saveConfig: stateDir, config });
+      },
       acquireLock: async (stateDir) => {
         calls.push({ acquireLock: stateDir });
         return { path: `${stateDir}/daemon.lock`, release: async () => calls.push({ releaseLock: true }) };
@@ -42,6 +45,7 @@ describe("daemon CLI", () => {
     expect(calls).toEqual([
       { ensureStateDir: "/tmp/state" },
       { acquireLock: "/tmp/state" },
+      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:17373", allowedProjects: [] } },
       {
         startServer: expect.objectContaining({
           stateDir: "/tmp/state",
@@ -117,6 +121,7 @@ describe("daemon CLI", () => {
       getStateDir: () => "/tmp/state",
       ensureStateDir: async () => undefined,
       loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      saveConfig: async (stateDir, config) => calls.push({ saveConfig: stateDir, config }),
       acquireLock: async (stateDir) => {
         calls.push({ acquireLock: stateDir });
         return { path: `${stateDir}/daemon.lock`, release: async () => calls.push({ releaseLock: true }) };
@@ -141,7 +146,13 @@ describe("daemon CLI", () => {
     });
 
     expect(code).toBe(0);
-    expect(calls).toEqual([{ acquireLock: "/tmp/state" }, { openStore: "/tmp/state" }, { closeStore: true }, { releaseLock: true }]);
+    expect(calls).toEqual([
+      { acquireLock: "/tmp/state" },
+      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:0", allowedProjects: [] } },
+      { openStore: "/tmp/state" },
+      { closeStore: true },
+      { releaseLock: true },
+    ]);
     await expect(startOptions?.authenticateToken?.("stored-token")).resolves.toBe(true);
     await expect(startOptions?.pairService?.createPairingCode?.()).resolves.toEqual({
       pairCode: "123456",
