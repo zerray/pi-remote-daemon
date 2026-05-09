@@ -8,7 +8,7 @@ Accepted
 
 # Context
 
-The package originally used the `pi-remote-daemon` name. The current design exposes `/remote-control` and `/remote-control-pair`, with the daemon acting as the relay behind a remote-control user experience.
+The package originally used a daemon-centered name. The current design exposes `/remote-control` and `/remote-control-pair`, with the daemon acting as the relay behind a remote-control user experience.
 
 # Decision
 
@@ -16,4 +16,4 @@ Rename the package, CLI binary, daemon display name, default state directory, en
 
 # Consequences
 
-The naming matches the TUI command surface. Existing users of previous local builds may need to move state from `~/.pi/remote-daemon` to `~/.pi/remote-control` and update environment variables from `PI_REMOTE_DAEMON_*` to `PI_REMOTE_CONTROL_*`.
+The naming matches the TUI command surface. Existing users of previous local builds may need to move state into `~/.pi/remote-control` and update environment variables to `PI_REMOTE_CONTROL_*`.
