@@ -117,7 +117,7 @@ async function handleHttpRequest(
   }
 
   if (request.method === "POST" && request.url === "/v1/pair/code") {
-    if (!(await isAuthorized(request, options))) {
+    if (!(await canCreatePairingCode(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -232,6 +232,16 @@ async function handleUpgrade(
       if (webSocket.readyState === webSocket.OPEN) webSocket.send(JSON.stringify(event));
     });
   });
+}
+
+async function canCreatePairingCode(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
+  if (await isAuthorized(request, options)) return true;
+  return !options.authenticateToken && isLoopbackBindAddress(options.config.bindAddress);
+}
+
+function isLoopbackBindAddress(bindAddress: string): boolean {
+  const { host } = parseBindAddress(bindAddress);
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
 
 async function isAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {

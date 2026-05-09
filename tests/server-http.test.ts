@@ -236,6 +236,31 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("creates pairing codes on loopback when no authenticator is configured", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          pairCode: "123456",
+          expiresAt: "2026-05-09T00:01:00.000Z",
+        });
+      },
+      {
+        pairService: {
+          createPairingCode: async () => ({
+            pairCode: "123456",
+            expiresAt: "2026-05-09T00:01:00.000Z",
+          }),
+          claimPairingCode: async () => {
+            throw new Error("not used");
+          },
+        },
+      },
+    );
+  });
+
   it("creates pairing codes for authenticated local operators", async () => {
     await withServer(
       async (baseUrl) => {
