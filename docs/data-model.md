@@ -167,16 +167,6 @@ type TuiControlChannel = {
 
 The control channel is the daemon's route for sending remote prompt and abort commands to the owning TUI extension. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
 
-## Tool call status
+## Tool state
 
-```ts
-type ToolCallStatus = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "succeeded" | "failed" | "aborted";
-  summary?: string;
-  updatedAt: string;
-};
-```
-
-Tool call status is derived from TUI-forwarded Pi tool execution events and streamed to the iOS app in compact form.
+`tools` is currently an empty array in session snapshots. Tool execution details are forwarded as raw Pi TUI events on the WebSocket stream.

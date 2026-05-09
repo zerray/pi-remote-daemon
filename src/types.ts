@@ -14,12 +14,6 @@ export type DaemonState = {
   stateDir: string;
 };
 
-export type ProjectRecord = {
-  id: string;
-  name: string;
-  path: string;
-};
-
 export type PairedDevice = {
   id: string;
   name: string;
@@ -37,34 +31,10 @@ export type PairingCode = {
   consumedAt?: IsoTimestamp;
 };
 
-export type SessionIndexRecord = {
-  id: string;
-  projectId: string;
-  piSessionId: string;
-  sessionFile: string;
-  nameCache?: string;
-  updatedAt: IsoTimestamp;
-  messageCountCache: number;
-  lastOpenedAt?: IsoTimestamp;
-};
-
-export type LiveSessionStatus = "idle" | "streaming" | "aborting" | "disposed";
-
-export type LiveSessionController = {
-  sessionId: string;
-  projectId: string;
-  piSessionId: string;
-  sessionFile: string;
-  status: LiveSessionStatus;
-  lastUsedAt: IsoTimestamp;
-};
-
-export type ToolCallStatusValue = "pending" | "running" | "succeeded" | "failed" | "aborted";
-
 export type ToolCallStatus = {
   id: string;
   name: string;
-  status: ToolCallStatusValue;
+  status: "pending" | "running" | "succeeded" | "failed" | "aborted";
   summary?: string;
   updatedAt: IsoTimestamp;
 };

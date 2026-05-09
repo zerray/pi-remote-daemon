@@ -129,7 +129,7 @@ describe("daemon HTTP server", () => {
         webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
         await new Promise<void>((resolve) => webSocket.once("open", resolve));
 
-        const event = { type: "assistant_delta", messageId: "msg_1", text: "hello" };
+        const event = { type: "message_update", message: { id: "msg_1", role: "assistant" }, assistantMessageEvent: { type: "text_delta", text: "hello" } };
         const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
           method: "POST",
           headers: { authorization: "Bearer test-token", "content-type": "application/json" },
