@@ -7,13 +7,14 @@ export type CreatedPairingCode = PairingCode & {
 };
 
 export function createPairingCode(now: Date, ttlMs: number): CreatedPairingCode {
-  // Generate a six digit decimal code.
-  // Hash the code before storing it.
-  // Set createdAt and expiresAt from now and ttlMs.
-  void now;
-  void ttlMs;
-  void randomInt;
-  throw new NotImplementedError("createPairingCode");
+  const rawCode = randomInt(0, 1_000_000).toString().padStart(6, "0");
+  return {
+    id: `pair_${createHash("sha256").update(`${rawCode}:${now.toISOString()}`).digest("hex").slice(0, 16)}`,
+    rawCode,
+    codeHash: createHash("sha256").update(rawCode).digest("hex"),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+  };
 }
 
 export function hashPairingCode(rawCode: string): string {
