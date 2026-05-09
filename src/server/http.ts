@@ -116,16 +116,6 @@ async function handleHttpRequest(
     return;
   }
 
-  if (request.method === "POST" && request.url === "/v1/pair/code") {
-    if (!(await canCreatePairingCode(request, options))) {
-      writeJson(response, 401, { error: "unauthorized" });
-      return;
-    }
-    const result = await options.pairService?.createPairingCode?.();
-    writeJson(response, 200, result ?? { error: "pairing_unavailable" });
-    return;
-  }
-
   if (request.method === "POST" && request.url === "/v1/pair/claim") {
     try {
       const body = (await readJsonBody(request)) as PairClaimRequest;
@@ -240,16 +230,6 @@ async function handleUpgrade(
       if (webSocket.readyState === webSocket.OPEN) webSocket.send(JSON.stringify(event));
     });
   });
-}
-
-async function canCreatePairingCode(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
-  if (isLoopbackBindAddress(options.config.bindAddress)) return true;
-  return isAuthorized(request, options);
-}
-
-function isLoopbackBindAddress(bindAddress: string): boolean {
-  const { host } = parseBindAddress(bindAddress);
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
 
 async function isAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {

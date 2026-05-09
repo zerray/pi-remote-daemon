@@ -5,6 +5,7 @@ import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./confi
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
+import { buildPairingLink } from "./pairing-link.js";
 import { createPiSessionService } from "./pi-session-service.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
 import type { DaemonConfig } from "./types.js";
@@ -85,16 +86,25 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
 }
 
 async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {
-  const baseUrl = parseBaseUrlArg(args) ?? env.PI_REMOTE_CONTROL_URL ?? "http://127.0.0.1:17373";
-  const token = env.PI_REMOTE_CONTROL_DEV_TOKEN;
-  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
-  const result = (await (deps.fetchJson ?? fetchJson)(`${baseUrl}/v1/pair/code`, { method: "POST", headers })) as {
-    pairCode?: string;
-    expiresAt?: string;
-  };
-  (deps.writeLine ?? console.log)(`Pair code: ${result.pairCode}`);
-  (deps.writeLine ?? console.log)(`Expires at: ${result.expiresAt}`);
-  return 0;
+  const writeLine = deps.writeLine ?? console.log;
+  const stateDir = parseStateDirArg(args) ?? (deps.getStateDir ?? getDaemonStateDir)({ env });
+  await (deps.ensureStateDir ?? ensureDaemonStateDir)(stateDir);
+  const config = await (deps.loadConfig ?? loadDaemonConfig)(stateDir);
+  const store = (deps.openStore ?? openDaemonStore)(stateDir);
+  try {
+    const result = await store.createPairingCode(new Date(), 5 * 60_000);
+    const pairingLink = buildPairingLink({
+      advertisedBaseUrl: config.advertisedBaseUrl,
+      pairCode: result.pairCode,
+      expiresAt: result.expiresAt,
+    });
+    writeLine(`Pair code: ${result.pairCode}`);
+    writeLine(`Expires at: ${result.expiresAt}`);
+    writeLine(`Pairing link: ${pairingLink}`);
+    return 0;
+  } finally {
+    store.close();
+  }
 }
 
 async function stopCommand(args: string[], deps: CliDependencies, env: NodeJS.ProcessEnv): Promise<number> {

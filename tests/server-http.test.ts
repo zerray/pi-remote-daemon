@@ -240,77 +240,13 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("rejects unauthenticated pairing code creation on non-loopback binds", async () => {
-    await withServer(
-      async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
+  it("does not expose remote pairing code creation", async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
 
-        expect(response.status).toBe(401);
-      },
-      {
-        config: { bindAddress: "0.0.0.0:0", allowedProjects: [] },
-        pairService: {
-          createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
-          claimPairingCode: async () => {
-            throw new Error("not used");
-          },
-        },
-      },
-    );
-  });
-
-  it("creates pairing codes on loopback when no authenticator is configured", async () => {
-    await withServer(
-      async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
-
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({
-          pairCode: "123456",
-          expiresAt: "2026-05-09T00:01:00.000Z",
-        });
-      },
-      {
-        pairService: {
-          createPairingCode: async () => ({
-            pairCode: "123456",
-            expiresAt: "2026-05-09T00:01:00.000Z",
-          }),
-          claimPairingCode: async () => {
-            throw new Error("not used");
-          },
-        },
-      },
-    );
-  });
-
-  it("creates pairing codes for authenticated local operators", async () => {
-    await withServer(
-      async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/pair/code`, {
-          method: "POST",
-          headers: { authorization: "Bearer test-token" },
-        });
-
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({
-          pairCode: "123456",
-          expiresAt: "2026-05-09T00:01:00.000Z",
-        });
-      },
-      {
-        authenticateToken: (token) => token === "test-token",
-        pairService: {
-          createPairingCode: async () => ({
-            pairCode: "123456",
-            expiresAt: "2026-05-09T00:01:00.000Z",
-          }),
-          claimPairingCode: async () => {
-            throw new Error("not used");
-          },
-        },
-      },
-    );
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "not_found" });
+    });
   });
 
   it("returns 400 for invalid pairing claims", async () => {
@@ -341,8 +277,7 @@ describe("daemon HTTP server", () => {
     try {
       await withServer(
         async (baseUrl) => {
-          const codeResponse = await fetch(`${baseUrl}/v1/pair/code`, { method: "POST" });
-          const codeBody = (await codeResponse.json()) as { pairCode: string };
+          const codeBody = await store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000);
 
           const claimResponse = await fetch(`${baseUrl}/v1/pair/claim`, {
             method: "POST",
@@ -355,14 +290,12 @@ describe("daemon HTTP server", () => {
             headers: { authorization: `Bearer ${claimBody.token}` },
           });
 
-          expect(codeResponse.status).toBe(200);
           expect(claimResponse.status).toBe(200);
           expect(projectsResponse.status).toBe(200);
         },
         {
           authenticateToken: (token) => store.authenticateToken(token),
           pairService: {
-            createPairingCode: () => store.createPairingCode(new Date("2026-05-09T00:00:00.000Z"), 60_000),
             claimPairingCode: async (request) => {
               const claimed = await store.claimPairingCode(request.pairCode, request.deviceName, new Date("2026-05-09T00:00:30.000Z"));
               if (!claimed) throw new Error("invalid pair code");
