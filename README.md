@@ -15,8 +15,8 @@ node dist/cli.js stop
 From Pi TUI after installing the package:
 
 ```text
-/remote-control-pair
-/remote-control
+/remote-control-pair  # display QR code for iOS pairing
+/remote-control       # toggle this TUI session for remote control
 ```
 
 ## Directory overview

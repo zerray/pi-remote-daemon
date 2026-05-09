@@ -38,7 +38,7 @@ If another Pi process loads the extension, it sees the existing daemon and may r
 The extension responsibilities are session-aware:
 
 - Register `/remote-control` as a no-argument toggle for the current TUI session.
-- Register `/remote-control-pair` as the only pair-code creation command.
+- Register `/remote-control-pair` as the only pair-code creation command and render its pairing link as a QR code plus text fallback.
 - Start the daemon on demand when either command needs it.
 - When `/remote-control` enables a session, open a control channel to the daemon and register current session metadata.
 - When `/remote-control` disables a session or the TUI session shuts down, unregister it.
@@ -73,7 +73,7 @@ The daemon stores its own durable state in a daemon state directory, defaulting 
 
 Durable daemon-owned files:
 
-- `config.json`: daemon configuration such as bind address.
+- `config.json`: daemon configuration such as bind address and advertised base URL.
 - `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, and metadata.
 - `daemon.lock`: singleton lock file containing the daemon PID.
 
@@ -83,4 +83,4 @@ Active TUI sessions are process state, not durable daemon state. Pi session tran
 
 The package can be installed with Pi package installation, for example from a local path, git source, or npm source. The package manifest exposes the extension through the `pi.extensions` field and the daemon binary through the normal package binary entry.
 
-Installing the Pi package makes Pi aware of `/remote-control` and `/remote-control-pair`; it does not by itself imply that the daemon process is running or that any TUI session is remotely visible.
+Installing the Pi package makes Pi aware of `/remote-control` and `/remote-control-pair`; it does not by itself imply that the daemon process is running or that any TUI session is remotely visible. Pairing QR codes require an advertised base URL that is reachable from iOS, such as a Tailscale HTTPS or HTTP URL.

@@ -48,10 +48,11 @@ Pairing codes and device token hashes are durable. Active session registry entri
 ```ts
 type DaemonConfig = {
   bindAddress: string;
+  advertisedBaseUrl?: string;
 };
 ```
 
-`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions.
+`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions. `advertisedBaseUrl` is the URL encoded into pairing QR codes and used by iOS for future daemon calls; it must not be a loopback or wildcard address when pairing a separate device.
 
 ## Daemon process state
 
@@ -79,6 +80,20 @@ type PairingCode = {
 ```
 
 Pairing codes are short-lived. The daemon stores code hashes, not raw codes. Raw pair codes are created only for `/remote-control-pair` and are displayed in the Pi TUI.
+
+## Pairing link
+
+```ts
+type PairingLink = {
+  scheme: "pi-remote";
+  action: "pair";
+  baseUrl: string;
+  code: string;
+  expiresAt: string;
+};
+```
+
+The raw link is encoded as a `pi-remote://pair?...` URL and rendered as a QR code by `/remote-control-pair`. The same values are displayed as text fallback.
 
 ## Paired device
 
