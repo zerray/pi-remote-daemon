@@ -8,11 +8,10 @@ The daemon state directory defaults to `~/.pi/remote-daemon` and can be overridd
 ~/.pi/remote-daemon/
 ├── config.json
 ├── daemon.sqlite
-├── daemon.lock
-└── daemon.pid
+└── daemon.lock
 ```
 
-The directory must be created with owner-only permissions. Database and token-bearing files must not be world-readable.
+The directory must be created with owner-only permissions. Database and token-bearing files must not be world-readable. `daemon.lock` is created atomically and contains the daemon PID for singleton enforcement, `status`, and `stop`.
 
 ## SQLite schema
 

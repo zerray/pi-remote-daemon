@@ -29,11 +29,7 @@ The extension may perform a cheap health check on Pi startup, but it must not au
 
 ## Singleton ownership
 
-Only the daemon process owns the network listener, pairing state, device tokens, and live Pi session runtimes. Singleton enforcement uses:
-
-- A PID file or lock file under the daemon state directory.
-- A health endpoint check before spawn.
-- Atomic lock acquisition during startup.
+Only the daemon process owns the network listener, pairing state, device tokens, and live Pi session runtimes. Singleton enforcement uses `daemon.lock` under the daemon state directory. The lock is created atomically during startup and contains the daemon PID for `status` and `stop`.
 
 If another Pi process loads the extension, it sees the existing daemon and only reports status.
 
@@ -71,8 +67,7 @@ Durable daemon-owned files:
 
 - `config.json`: daemon configuration such as bind address and allowed project roots.
 - `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, project records, metadata, and session index cache.
-- `daemon.lock`: singleton lock file.
-- `daemon.pid`: best-effort process metadata for status commands.
+- `daemon.lock`: singleton lock file containing the daemon PID.
 
 Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon does not duplicate full conversation history. It stores only references, cached summary fields, and app-facing stable IDs needed to serve the remote API.
 

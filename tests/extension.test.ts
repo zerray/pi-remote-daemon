@@ -64,17 +64,28 @@ describe("remote daemon extension", () => {
   });
 
   it("starts daemon in the background", async () => {
+    const commands: Registered[] = [];
     const execCalls: ExecCall[] = [];
-    const { pi, commands } = createFakePi(execCalls);
     const { ctx, notifications } = createContext();
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      exec: async (command: string, args: string[]) => {
+        execCalls.push({ command, args });
+        if (args.includes("status")) return { stdout: "pi-remote-daemon is stopped\n", stderr: "", code: 1, killed: false };
+        return { stdout: "", stderr: "", code: 0, killed: false };
+      },
+    };
     remoteDaemonExtension(pi as never);
 
     await commands[0]!.handler("start --bind 127.0.0.1:17373", ctx);
 
-    expect(execCalls[0]?.command).toBe("sh");
-    expect(execCalls[0]?.args).toHaveLength(2);
-    expect(execCalls[0]?.args[1]).toContain("'start' '--bind' '127.0.0.1:17373'");
-    expect(execCalls[0]?.args[1]).toContain("&");
+    expect(execCalls[0]).toEqual({ command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] });
+    expect(execCalls[1]?.command).toBe("sh");
+    expect(execCalls[1]?.args).toHaveLength(2);
+    expect(execCalls[1]?.args[1]).toContain("'start' '--bind' '127.0.0.1:17373'");
+    expect(execCalls[1]?.args[1]).toContain("&");
     expect(notifications).toEqual([{ message: "pi-remote-daemon start requested", type: "info" }]);
   });
 
