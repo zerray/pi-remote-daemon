@@ -115,6 +115,7 @@ describe("remote control extension", () => {
 
     expect(execCalls[0]).toEqual({ command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] });
     expect(execCalls[1]?.command).toBe("sh");
+    expect(execCalls[1]?.args[1]).toContain("nohup");
     expect(fetchCalls).toEqual([
       { url: "http://127.0.0.1:17373/v1/health", init: undefined },
       { url: "http://127.0.0.1:17373/v1/health", init: undefined },
@@ -127,6 +128,32 @@ describe("remote control extension", () => {
       },
     ]);
     expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
+  });
+
+  it("reports startup readiness failure without throwing", async () => {
+    const commands: Registered[] = [];
+    const { ctx, notifications } = createContext();
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      on: vi.fn(),
+      sendUserMessage: vi.fn(),
+      exec: async (command: string, args: string[]) => {
+        if (args.includes("status")) return { stdout: "pi-remote-control is stopped\n", stderr: "", code: 1, killed: false };
+        return { stdout: "", stderr: "", code: 0, killed: false };
+      },
+    };
+    vi.stubEnv("PI_REMOTE_CONTROL_READY_ATTEMPTS", "1");
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+    remoteControlExtension(pi as never);
+
+    await expect(commands.find((command) => command.name === "remote-control")!.handler("", ctx)).resolves.toBeUndefined();
+
+    expect(notifications.at(-1)).toEqual({
+      message: "pi-remote-control did not become ready; see /tmp/pi-remote-control.log",
+      type: "error",
+    });
   });
 
   it("toggles off an already registered TUI session", async () => {

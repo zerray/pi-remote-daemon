@@ -18,7 +18,12 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   pi.registerCommand("remote-control", {
     description: "Toggle Pi remote control for this TUI session",
     handler: async (_args, ctx) => {
-      await ensureDaemonStarted(pi);
+      try {
+        await ensureDaemonStarted(pi);
+      } catch (error) {
+        ctx.ui.notify(`${error instanceof Error ? error.message : String(error)}; see /tmp/pi-remote-control.log`, "error");
+        return;
+      }
       const sessionId = daemonSessionId(ctx);
       if (activeSessionIds.has(sessionId)) {
         await fetch(`${daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
@@ -49,7 +54,12 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   pi.registerCommand("remote-control-pair", {
     description: "Display a QR pairing link for Pi Remote Control",
     handler: async (_args, ctx) => {
-      await ensureDaemonStarted(pi);
+      try {
+        await ensureDaemonStarted(pi);
+      } catch (error) {
+        ctx.ui.notify(`${error instanceof Error ? error.message : String(error)}; see /tmp/pi-remote-control.log`, "error");
+        return;
+      }
       const cli = cliCommand();
       const result = await pi.exec(cli.command, [...cli.args, "pair"]);
       const stdout = result.stdout.trim();
@@ -76,12 +86,12 @@ async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
   const status = await pi.exec(cli.command, [...cli.args, "status"]);
   if (status.code === 0) return;
 
-  const shellLine = `${shellQuote(cli.command)} ${[...cli.args, "start"].map(shellQuote).join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
+  const shellLine = `nohup ${shellQuote(cli.command)} ${[...cli.args, "start"].map(shellQuote).join(" ")} </dev/null >/tmp/pi-remote-control.log 2>&1 &`;
   await pi.exec("sh", ["-lc", shellLine]);
   await waitForDaemonReady();
 }
 
-async function waitForDaemonReady(attempts = 20, delayMs = 100): Promise<void> {
+async function waitForDaemonReady(attempts = Number.parseInt(process.env.PI_REMOTE_CONTROL_READY_ATTEMPTS ?? "100", 10), delayMs = 100): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetch(`${daemonBaseUrl()}/v1/health`);
