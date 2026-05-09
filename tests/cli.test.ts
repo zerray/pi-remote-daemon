@@ -13,7 +13,7 @@ describe("daemon CLI", () => {
       ensureStateDir: async (stateDir) => {
         calls.push({ ensureStateDir: stateDir });
       },
-      loadConfig: async () => ({ bindAddress: "127.0.0.1:17373", allowedProjects: [] }),
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:17373" }),
       saveConfig: async (stateDir, config) => {
         calls.push({ saveConfig: stateDir, config });
       },
@@ -45,11 +45,11 @@ describe("daemon CLI", () => {
     expect(calls).toEqual([
       { ensureStateDir: "/tmp/state" },
       { acquireLock: "/tmp/state" },
-      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:17373", allowedProjects: [] } },
+      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:17373" } },
       {
         startServer: expect.objectContaining({
           stateDir: "/tmp/state",
-          config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
+          config: { bindAddress: "127.0.0.1:0" },
         }),
       },
       { releaseLock: true },
@@ -121,7 +121,7 @@ describe("daemon CLI", () => {
         calls.push({ acquireLock: stateDir });
         return undefined;
       },
-      loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:0" }),
       startServer: async () => {
         throw new Error("should not start");
       },
@@ -139,7 +139,7 @@ describe("daemon CLI", () => {
     const code = await main(["start"], {
       getStateDir: () => "/tmp/state",
       ensureStateDir: async () => undefined,
-      loadConfig: async () => ({ bindAddress: "127.0.0.1:0", allowedProjects: [] }),
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:0" }),
       saveConfig: async (stateDir, config) => calls.push({ saveConfig: stateDir, config }),
       acquireLock: async (stateDir) => {
         calls.push({ acquireLock: stateDir });
@@ -166,7 +166,7 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(calls).toEqual([
       { acquireLock: "/tmp/state" },
-      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:0", allowedProjects: [] } },
+      { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:0" } },
       { openStore: "/tmp/state" },
       { closeStore: true },
       { releaseLock: true },

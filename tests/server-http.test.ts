@@ -13,7 +13,7 @@ async function withServer<T>(
 ): Promise<T> {
   const server = await startDaemonServer({
     stateDir: "/tmp/pi-remote-control-test",
-    config: { bindAddress: "127.0.0.1:0", allowedProjects: [] },
+    config: { bindAddress: "127.0.0.1:0" },
     piVersion: "pi-test",
     daemonVersion: "daemon-test",
     ...overrides,

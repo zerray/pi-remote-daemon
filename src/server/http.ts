@@ -176,7 +176,7 @@ async function handleHttpRequest(
       return;
     }
 
-    writeJson(response, 200, { projects: options.activeSessions?.listProjects() ?? options.config.allowedProjects ?? [] });
+    writeJson(response, 200, { projects: options.activeSessions?.listProjects() ?? [] });
     return;
   }
 
