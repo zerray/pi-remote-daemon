@@ -10,13 +10,15 @@ export function defaultDaemonConfig(): DaemonConfig {
 }
 
 export async function loadDaemonConfig(stateDir: string): Promise<DaemonConfig> {
-  // Read config.json from the state directory.
-  // If it does not exist, return defaultDaemonConfig().
-  // Validate the parsed JSON shape before returning it.
-  void stateDir;
-  void readFile;
-  void join;
-  throw new NotImplementedError("loadDaemonConfig");
+  try {
+    const content = await readFile(join(stateDir, "config.json"), "utf8");
+    return JSON.parse(content) as DaemonConfig;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return defaultDaemonConfig();
+    }
+    throw error;
+  }
 }
 
 export async function saveDaemonConfig(stateDir: string, config: DaemonConfig): Promise<void> {
