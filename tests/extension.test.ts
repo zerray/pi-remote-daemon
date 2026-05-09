@@ -120,6 +120,38 @@ describe("remote control extension", () => {
     expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
   });
 
+  it("restarts daemon and retries when TUI endpoint is missing", async () => {
+    const commands: Registered[] = [];
+    const execCalls: ExecCall[] = [];
+    const fetchStatuses = [404, 200];
+    const { ctx, notifications } = createContext();
+    const pi = {
+      registerCommand(name: string, options: Omit<Registered, "name">) {
+        commands.push({ name, ...options });
+      },
+      on: vi.fn(),
+      sendUserMessage: vi.fn(),
+      exec: async (command: string, args: string[]) => {
+        execCalls.push({ command, args });
+        return { stdout: "pi-remote-control is running (pid 1234)\n", stderr: "", code: 0, killed: false };
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: fetchStatuses.shift() ?? 200 })),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    expect(execCalls[0]?.args.at(-1)).toBe("status");
+    expect(execCalls[1]?.args.at(-1)).toBe("stop");
+    expect(execCalls[2]?.command).toBe("sh");
+    expect(execCalls[2]?.args[1]).toContain("'start'");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
+  });
+
   it("toggles off an already registered TUI session", async () => {
     const { pi, commands } = createFakePi();
     const { ctx, notifications } = createContext();
