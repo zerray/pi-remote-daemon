@@ -2,14 +2,14 @@
 
 ## Purpose
 
-`pi-remote-daemon` is a long-lived local service that exposes authenticated, Tailscale-reachable remote control for Pi sessions. It is designed to be distributed as a Pi package, but the daemon process itself is not a Pi extension runtime.
+`pi-remote-daemon` is a long-lived local relay service that exposes authenticated, Tailscale-reachable remote control for Pi TUI sessions that the user explicitly enables. It is distributed as a Pi package, but the daemon process itself is not a Pi extension runtime.
 
 ## Pi package shape
 
 The package contains two runtime surfaces:
 
-- Daemon binary: the long-lived HTTP/WebSocket service used by the iOS app.
-- Pi extension: a thin control shim loaded by Pi that registers user-facing commands and optional status UI.
+- Daemon binary: the long-lived HTTP/WebSocket service used by the iOS app and the Pi TUI extension.
+- Pi extension: the TUI-facing control surface that registers remote-control commands, owns the active Pi session integration, and forwards session events to the daemon.
 
 The extension must not host the daemon server in-process. Pi extensions are loaded per Pi process and are rebound during session replacement flows, so a server started directly from extension load would be tied to the wrong lifecycle and could be attempted once per Pi session/process.
 
@@ -19,44 +19,53 @@ The daemon is started by one of these explicit singleton mechanisms:
 
 1. Manual CLI:
    - `pi-remote-daemon start`.
-2. Pi extension command:
-   - `/remote-daemon start` starts the same detached daemon binary after checking whether it is already running.
+2. Pi extension commands:
+   - `/remote-control` starts the daemon if needed before enabling the current TUI session.
+   - `/remote-control-pair` starts the daemon if needed before creating a pair code.
 
 OS service installation is intentionally deferred for the MVP.
 
-The extension may perform a cheap health check on Pi startup, but it must not auto-start the daemon by default. If an auto-start option is added later, it must still acquire the daemon singleton lock before spawning and must return immediately when an existing daemon is healthy.
+The extension may perform a cheap health check when a command runs, but it must not auto-start the daemon during extension load. Daemon startup goes through singleton lock acquisition and returns immediately when an existing daemon is healthy.
 
 ## Singleton ownership
 
-Only the daemon process owns the network listener, pairing state, device tokens, and live Pi session runtimes. Singleton enforcement uses `daemon.lock` under the daemon state directory. The lock is created atomically during startup and contains the daemon PID for `status` and `stop`.
+Only the daemon process owns the network listener, pairing state, device tokens, active TUI session registry, and iOS WebSocket fanout. Singleton enforcement uses `daemon.lock` under the daemon state directory. The lock is created atomically during startup and contains the daemon PID for `status` and `stop`.
 
-If another Pi process loads the extension, it sees the existing daemon and only reports status.
+If another Pi process loads the extension, it sees the existing daemon and may register its own TUI session only after the user runs `/remote-control` in that process.
 
 ## Pi extension responsibilities
 
-The extension responsibilities are intentionally small:
+The extension responsibilities are session-aware:
 
-- Register `/remote-daemon status`.
-- Register `/remote-daemon start` and `/remote-daemon stop` as convenience commands.
-- Register `/remote-daemon pair` to request or display a short-lived pair code from the daemon.
-- Optionally show daemon connection status in the Pi UI.
+- Register `/remote-control` as a no-argument toggle for the current TUI session.
+- Register `/remote-control-pair` as the only pair-code creation command.
+- Start the daemon on demand when either command needs it.
+- When `/remote-control` enables a session, open a control channel to the daemon and register current session metadata.
+- When `/remote-control` disables a session or the TUI session shuts down, unregister it.
+- Forward Pi message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active.
+- Receive daemon-forwarded prompt and abort commands and apply them to the current live TUI runtime through Pi extension APIs.
 
-The extension does not proxy iOS requests and does not keep per-session server state.
+The extension owns live Pi session control. It does not expose a network listener to iOS.
 
 ## Daemon responsibilities
 
-The daemon responsibilities are independent of active Pi TUI sessions:
+The daemon responsibilities are independent of Pi SDK session ownership:
 
 - Serve the HTTP/WebSocket API documented in `docs/interfaces.md`.
-- Enforce token authentication and device pairing.
-- Discover projects and sessions through Pi SDK `SessionManager`.
-- Open, prompt, stream, and abort Pi sessions through Pi SDK runtime or Pi RPC.
-- Normalize Pi events into app-level stream events.
-- Keep Pi package and protocol compatibility isolated from the iOS client.
+- Enforce device token authentication for iOS requests.
+- Persist pairing codes, paired device token hashes, and daemon metadata.
+- Track currently activated TUI sessions and group them into projects for iOS display.
+- Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
+- Normalize TUI-forwarded Pi events into app-level stream events.
+- Broadcast session updates to subscribed iOS WebSocket clients.
+
+The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abort sessions in the MVP.
 
 ## Session runtime model
 
-The daemon creates live Pi runtimes only when a remote client opens or interacts with a session. A daemon process may maintain multiple session controllers, keyed by daemon session ID, subject to a resource limit. Idle controllers can be disposed and recreated from the persisted Pi session file.
+A live session controller is represented by a TUI extension control channel, not a daemon-created Pi runtime. The control channel is the authority for one remote-control-enabled TUI session. If the channel closes, the daemon marks the session inactive, removes it from project/session listings, and notifies iOS subscribers.
+
+Multiple TUI processes may enable remote control at the same time. Each active session has one owning TUI control channel. The daemon rejects prompt or abort requests for sessions without an active owner.
 
 ## Persistence model
 
@@ -64,14 +73,14 @@ The daemon stores its own durable state in a daemon state directory, defaulting 
 
 Durable daemon-owned files:
 
-- `config.json`: daemon configuration such as bind address and allowed project roots.
-- `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, project records, metadata, and session index cache.
+- `config.json`: daemon configuration such as bind address.
+- `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, and metadata.
 - `daemon.lock`: singleton lock file containing the daemon PID.
 
-Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon does not duplicate full conversation history. It stores only references, cached summary fields, and app-facing stable IDs needed to serve the remote API.
+Active TUI sessions are process state, not durable daemon state. Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon may keep in-memory snapshots for currently active sessions so newly connected iOS clients can render current state.
 
 ## Installation model
 
 The package can be installed with Pi package installation, for example from a local path, git source, or npm source. The package manifest exposes the extension through the `pi.extensions` field and the daemon binary through the normal package binary entry.
 
-Installing the Pi package makes Pi aware of the extension; it does not by itself imply that the daemon process is running. The user or installer enables the daemon service separately.
+Installing the Pi package makes Pi aware of `/remote-control` and `/remote-control-pair`; it does not by itself imply that the daemon process is running or that any TUI session is remotely visible.

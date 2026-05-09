@@ -1,28 +1,28 @@
 # Pi Remote Daemon
 
-Private daemon that exposes authenticated remote access to local Pi sessions for the Pi iOS app.
+Private relay daemon for iOS remote control of explicitly enabled Pi TUI sessions.
 
 ## Run
 
 ```bash
 npm install
 npm run build
-PI_REMOTE_DAEMON_DEV_TOKEN=test-token node dist/cli.js start --bind 127.0.0.1:17373
+node dist/cli.js start --bind 127.0.0.1:17373
 node dist/cli.js status
-PI_REMOTE_DAEMON_DEV_TOKEN=test-token node dist/cli.js pair
 node dist/cli.js stop
 ```
 
-In another shell:
+From Pi TUI after installing the package:
 
-```bash
-TOKEN=test-token ./scripts/http-smoke-test.sh
+```text
+/remote-control-pair
+/remote-control
 ```
 
 ## Directory overview
 
 - `scripts/http-smoke-test.sh` — curl/WebSocket smoke test for daemon HTTP endpoints.
 - `docs/architecture.md` — daemon architecture, Pi package shape, and lifecycle boundaries.
-- `docs/interfaces.md` — daemon public API and daemon-to-Pi integration contract.
-- `docs/data-model.md` — daemon state, pairing, device, project, and live session structures.
+- `docs/interfaces.md` — daemon public API and TUI control integration contract.
+- `docs/data-model.md` — daemon state, pairing, device, active session, and stream structures.
 - `docs/adr/` — accepted daemon decisions.

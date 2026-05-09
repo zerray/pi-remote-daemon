@@ -15,20 +15,12 @@ The directory must be created with owner-only permissions. Database and token-be
 
 ## SQLite schema
 
-`daemon.sqlite` is the daemon-owned source of truth for remote access state. Pi session JSONL files remain the source of truth for transcripts.
+`daemon.sqlite` is the daemon-owned source of truth for remote access state. Active TUI sessions are process state and Pi session JSONL files remain the source of truth for transcripts.
 
 ```sql
 create table meta (
   key text primary key,
   value text not null
-);
-
-create table projects (
-  id text primary key,
-  name text not null,
-  path text not null unique,
-  created_at text not null,
-  updated_at text not null
 );
 
 create table devices (
@@ -47,35 +39,19 @@ create table pairing_codes (
   expires_at text not null,
   consumed_at text
 );
-
-create table session_index (
-  id text primary key,
-  project_id text not null references projects(id),
-  pi_session_id text not null,
-  session_file text not null unique,
-  name_cache text,
-  updated_at text not null,
-  message_count_cache integer not null default 0,
-  last_opened_at text
-);
 ```
 
-`session_index` is a cache and stable-ID map for the daemon API. It can be rebuilt by scanning Pi session files with Pi SDK `SessionManager`.
+Pairing codes and device token hashes are durable. Active session registry entries are rebuilt by currently running Pi TUI extensions after the user enables `/remote-control`.
 
 ## Config file
 
 ```ts
 type DaemonConfig = {
   bindAddress: string;
-  allowedProjects: Array<{
-    id: string;
-    name: string;
-    path: string;
-  }>;
 };
 ```
 
-`config.json` is human-editable daemon configuration. Project records are mirrored into SQLite so API responses and session indexes have stable foreign keys.
+`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions.
 
 ## Daemon process state
 
@@ -84,7 +60,6 @@ type DaemonState = {
   pid: number;
   startedAt: string;
   version: string;
-  piVersion: string;
   bindAddress: string;
   stateDir: string;
 };
@@ -103,7 +78,7 @@ type PairingCode = {
 };
 ```
 
-Pairing codes are short-lived. The daemon stores code hashes, not raw codes.
+Pairing codes are short-lived. The daemon stores code hashes, not raw codes. Raw pair codes are created only for `/remote-control-pair` and are displayed in the Pi TUI.
 
 ## Paired device
 
@@ -120,32 +95,62 @@ type PairedDevice = {
 
 The iOS app stores the bearer token in Keychain. The daemon stores only token hashes.
 
-## Project registry
+## Active project
 
 ```ts
-type ProjectRecord = {
+type ActiveProject = {
   id: string;
   name: string;
   path: string;
 };
 ```
 
-Projects are daemon-approved working directories. The daemon never lets a mobile client browse arbitrary host paths outside configured projects.
+An active project exists while at least one registered TUI session for that project has remote control enabled.
 
-## Live session controller
+## Active TUI session
 
 ```ts
-type LiveSessionController = {
-  sessionId: string;
-  projectId: string;
+type ActiveTuiSession = {
+  id: string;
   piSessionId: string;
+  projectId: string;
   sessionFile: string;
-  status: "idle" | "streaming" | "aborting" | "disposed";
-  lastUsedAt: string;
+  name?: string;
+  pid: number;
+  messageCount: number;
+  isStreaming: boolean;
+  registeredAt: string;
+  lastSeenAt: string;
 };
 ```
 
-A live controller wraps the Pi SDK runtime or RPC subprocess for one open session. Controllers are daemon-owned and may be disposed when idle.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes.
+
+## Session snapshot
+
+```ts
+type SessionSnapshot = {
+  session: ActiveTuiSession;
+  messages: ChatMessage[];
+  tools: ToolCallStatus[];
+  pendingMessageCount: number;
+};
+```
+
+The daemon keeps an in-memory snapshot for active sessions so newly connected iOS clients can render current state before incremental events arrive.
+
+## TUI control channel
+
+```ts
+type TuiControlChannel = {
+  sessionId: string;
+  pid: number;
+  status: "active" | "closing";
+  lastHeartbeatAt: string;
+};
+```
+
+The control channel is the daemon's route for sending remote prompt and abort commands to the owning TUI extension.
 
 ## Tool call status
 
@@ -159,4 +164,4 @@ type ToolCallStatus = {
 };
 ```
 
-Tool call status is derived from Pi tool execution events and streamed to the iOS app in compact form.
+Tool call status is derived from TUI-forwarded Pi tool execution events and streamed to the iOS app in compact form.
