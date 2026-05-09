@@ -1,4 +1,5 @@
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import { NotImplementedError } from "./errors.js";
 
@@ -8,11 +9,11 @@ export type StateDirOptions = {
 };
 
 export function getDaemonStateDir(options: StateDirOptions = {}): string {
-  // If PI_REMOTE_DAEMON_DIR is set, resolve and return it.
+  const env = options.env ?? process.env;
+  if (env.PI_REMOTE_DAEMON_DIR) return resolve(env.PI_REMOTE_DAEMON_DIR);
+
   // Otherwise use the provided home directory or OS home directory.
   // Append .pi/remote-daemon to the home directory.
-  void options;
-  void resolve;
   void join;
   throw new NotImplementedError("getDaemonStateDir");
 }
