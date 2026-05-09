@@ -31,8 +31,12 @@ export default function remoteDaemonExtension(pi: ExtensionAPI): void {
 function cliCommand(): { command: string; args: string[] } {
   const extensionDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = resolve(extensionDir, "..", "..");
+  const sourceRunner = resolve(packageRoot, "src", "cli-runner.cjs");
+  if (existsSync(sourceRunner)) return { command: process.execPath, args: [sourceRunner] };
+
   const distCli = resolve(packageRoot, "dist", "cli.js");
   if (existsSync(distCli)) return { command: process.execPath, args: [distCli] };
+
   return { command: "pi-remote-daemon", args: [] };
 }
 

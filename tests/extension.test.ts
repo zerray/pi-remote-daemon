@@ -58,7 +58,7 @@ describe("remote daemon extension", () => {
     await commands[0]!.handler("status", ctx);
 
     expect(execCalls).toEqual([
-      { command: process.execPath, args: [expect.stringContaining("dist/cli.js"), "status"] },
+      { command: process.execPath, args: [expect.stringContaining("src/cli-runner.cjs"), "status"] },
     ]);
     expect(notifications).toEqual([{ message: "ok", type: "info" }]);
   });

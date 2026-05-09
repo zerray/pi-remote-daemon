@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Authenticated remote daemon for Pi sessions.",
   "bin": {
-    "pi-remote-daemon": "./dist/cli.js"
+    "pi-remote-daemon": "./src/cli-runner.cjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.74.0",
+    "jiti": "^2.6.1",
     "ws": "^8.20.0"
   },
   "devDependencies": {
