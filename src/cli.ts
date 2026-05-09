@@ -5,6 +5,7 @@ import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./confi
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import { openDaemonStore, type DaemonStore } from "./persistence/daemon-store.js";
 import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
+import { createPiSessionService } from "./pi-session-service.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
 import type { DaemonConfig } from "./types.js";
 
@@ -63,6 +64,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     stateDir,
     config,
     authenticateToken: devToken ? (token) => token === devToken || store.authenticateToken(token) : (token) => store.authenticateToken(token),
+    sessionService: createPiSessionService(config),
     pairService: {
       createPairingCode: () => store.createPairingCode(new Date(), 5 * 60_000),
       claimPairingCode: async (request) => {
