@@ -35,12 +35,13 @@ export function summarizeToolArgs(toolName: string, args: unknown): string | und
 }
 
 export function toolStatusFromPiEvent(event: PiToolExecutionEvent, now: Date): ToolCallStatus {
-  // Map Pi start/update/end events into running/succeeded/failed statuses.
-  // Preserve toolCallId and toolName.
-  // Include a compact argument summary when available.
-  void event;
-  void now;
-  throw new NotImplementedError("toolStatusFromPiEvent");
+  return {
+    id: event.toolCallId,
+    name: event.toolName,
+    status: statusFromPiToolEvent(event),
+    summary: summarizeToolArgs(event.toolName, event.args),
+    updatedAt: now.toISOString(),
+  };
 }
 
 export function statusFromPiToolEvent(event: PiToolExecutionEvent): ToolCallStatusValue {
