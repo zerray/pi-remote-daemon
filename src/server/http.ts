@@ -20,10 +20,16 @@ export type RemoteSessionState = {
   pendingMessageCount: number;
 };
 
+export type PromptSessionRequest = {
+  text: string;
+  streamingBehavior?: "steer" | "followUp" | null;
+};
+
 export type SessionService = {
   listProjectSessions?(projectId: string): Promise<RemoteSessionSummary[]>;
   createProjectSession?(projectId: string): Promise<RemoteSessionSummary>;
   getSessionState?(sessionId: string): Promise<RemoteSessionState>;
+  promptSession?(sessionId: string, request: PromptSessionRequest): Promise<void>;
 };
 
 export type DaemonServer = {
@@ -88,6 +94,20 @@ async function handleHttpRequest(
     return;
   }
 
+  const promptMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/prompt$/);
+  if (request.method === "POST" && promptMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(promptMatch[1] ?? "");
+    const body = (await readJsonBody(request)) as PromptSessionRequest;
+    await options.sessionService?.promptSession?.(sessionId, body);
+    writeJson(response, 200, { accepted: true });
+    return;
+  }
+
   const sessionMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)$/);
   if (request.method === "GET" && sessionMatch) {
     if (!(await isAuthorized(request, options))) {
@@ -137,6 +157,12 @@ function parseBindAddress(bindAddress: string): { host: string; port: number } {
     host: bindAddress.slice(0, index),
     port: Number.parseInt(bindAddress.slice(index + 1), 10),
   };
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  let body = "";
+  for await (const chunk of request) body += String(chunk);
+  return body ? JSON.parse(body) : {};
 }
 
 function writeJson(response: ServerResponse, status: number, body: unknown): void {

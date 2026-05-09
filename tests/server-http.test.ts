@@ -185,4 +185,29 @@ describe("daemon HTTP server", () => {
       },
     );
   });
+
+  it("accepts authenticated prompts", async () => {
+    const prompts: unknown[] = [];
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/prompt`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ text: "hello", streamingBehavior: "followUp" }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true });
+        expect(prompts).toEqual([{ sessionId: "sess_1", text: "hello", streamingBehavior: "followUp" }]);
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          promptSession: async (sessionId, request) => {
+            prompts.push({ sessionId, ...request });
+          },
+        },
+      },
+    );
+  });
 });
