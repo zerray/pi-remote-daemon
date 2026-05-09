@@ -29,7 +29,11 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const response = await registerTuiSession(pi, ctx);
+      const response = await fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(toRegistration(ctx)),
+      });
       if (!response.ok) {
         ctx.ui.notify(`Remote control enable failed: HTTP ${response.status}`, "error");
         return;
@@ -67,39 +71,11 @@ function registerEventForwarders(pi: ExtensionAPI, forward: (event: unknown, ctx
   pi.on("agent_end", forward);
 }
 
-async function registerTuiSession(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<Response> {
-  let response = await postTuiRegistration(ctx);
-  if (response.status !== 404) return response;
-
-  await restartDaemon(pi);
-  response = await postTuiRegistration(ctx);
-  return response;
-}
-
-async function postTuiRegistration(ctx: ExtensionCommandContext): Promise<Response> {
-  return fetch(`${daemonBaseUrl()}/v1/tui/sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(toRegistration(ctx)),
-  });
-}
-
-async function restartDaemon(pi: ExtensionAPI): Promise<void> {
-  const cli = cliCommand();
-  await pi.exec(cli.command, [...cli.args, "stop"]);
-  await startDaemonInBackground(pi);
-}
-
 async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {
   const cli = cliCommand();
   const status = await pi.exec(cli.command, [...cli.args, "status"]);
   if (status.code === 0) return;
 
-  await startDaemonInBackground(pi);
-}
-
-async function startDaemonInBackground(pi: ExtensionAPI): Promise<void> {
-  const cli = cliCommand();
   const shellLine = `${shellQuote(cli.command)} ${[...cli.args, "start"].map(shellQuote).join(" ")} >/tmp/pi-remote-control.log 2>&1 &`;
   await pi.exec("sh", ["-lc", shellLine]);
 }
