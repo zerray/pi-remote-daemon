@@ -2,7 +2,8 @@ export type IsoTimestamp = string;
 
 export type DaemonConfig = {
   bindAddress: string;
-  allowedProjects: ProjectRecord[];
+  advertisedBaseUrl?: string;
+  allowedProjects?: ProjectRecord[];
 };
 
 export type DaemonState = {

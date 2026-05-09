@@ -6,13 +6,13 @@ import { DEFAULT_BIND_ADDRESS, defaultDaemonConfig, loadDaemonConfig, saveDaemon
 
 describe("daemon config", () => {
   it("has a safe localhost default", () => {
-    expect(defaultDaemonConfig()).toEqual({ bindAddress: DEFAULT_BIND_ADDRESS, allowedProjects: [] });
+    expect(defaultDaemonConfig()).toEqual({ bindAddress: DEFAULT_BIND_ADDRESS });
   });
 
   it("loads defaults when config.json does not exist", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-config-"));
     try {
-      await expect(loadDaemonConfig(root)).resolves.toEqual({ bindAddress: DEFAULT_BIND_ADDRESS, allowedProjects: [] });
+      await expect(loadDaemonConfig(root)).resolves.toEqual({ bindAddress: DEFAULT_BIND_ADDRESS });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -22,7 +22,7 @@ describe("daemon config", () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-config-"));
     const config = {
       bindAddress: "100.64.0.1:17373",
-      allowedProjects: [{ id: "proj_abc", name: "example", path: "/repo/example" }],
+      advertisedBaseUrl: "https://macbook.tailnet.ts.net:17373",
     };
 
     try {

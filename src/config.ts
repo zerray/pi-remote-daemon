@@ -5,7 +5,7 @@ import type { DaemonConfig } from "./types.js";
 export const DEFAULT_BIND_ADDRESS = "127.0.0.1:17373";
 
 export function defaultDaemonConfig(): DaemonConfig {
-  return { bindAddress: DEFAULT_BIND_ADDRESS, allowedProjects: [] };
+  return { bindAddress: DEFAULT_BIND_ADDRESS };
 }
 
 export async function loadDaemonConfig(stateDir: string): Promise<DaemonConfig> {

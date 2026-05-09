@@ -19,7 +19,7 @@ export function createPiSessionService(config: DaemonConfig, sessionManager: Ses
 }
 
 export function findProject(config: DaemonConfig, projectId: string): ProjectRecord | undefined {
-  return config.allowedProjects.find((project) => project.id === projectId);
+  return config.allowedProjects?.find((project) => project.id === projectId);
 }
 
 export function toRemoteSessionSummary(project: ProjectRecord, session: unknown): RemoteSessionSummary {

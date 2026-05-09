@@ -147,7 +147,7 @@ async function handleHttpRequest(
       return;
     }
 
-    writeJson(response, 200, { projects: options.config.allowedProjects });
+    writeJson(response, 200, { projects: options.config.allowedProjects ?? [] });
     return;
   }
 

@@ -107,7 +107,7 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(calls).toContainEqual({
       saveConfig: "/tmp/state",
-      config: { bindAddress: "127.0.0.1:17373", allowedProjects: [] },
+      config: { bindAddress: "127.0.0.1:17373" },
     });
   });
 
