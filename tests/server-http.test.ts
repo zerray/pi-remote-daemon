@@ -101,6 +101,48 @@ describe("daemon HTTP server", () => {
               messageCount: 2,
             },
           ],
+          createProjectSession: async () => {
+            throw new Error("not used");
+          },
+        },
+      },
+    );
+  });
+
+  it("creates a project session for authenticated devices", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          session: {
+            id: "sess_new",
+            piSessionId: "pi_new",
+            projectId: "proj_1",
+            name: null,
+            path: "/sessions/new.jsonl",
+            updatedAt: "2026-05-09T00:00:00.000Z",
+            messageCount: 0,
+          },
+        });
+      },
+      {
+        authenticateToken: (token) => token === "test-token",
+        sessionService: {
+          listProjectSessions: async () => [],
+          createProjectSession: async (projectId) => ({
+            id: "sess_new",
+            piSessionId: "pi_new",
+            projectId,
+            name: null,
+            path: "/sessions/new.jsonl",
+            updatedAt: "2026-05-09T00:00:00.000Z",
+            messageCount: 0,
+          }),
         },
       },
     );

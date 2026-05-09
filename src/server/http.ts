@@ -14,6 +14,7 @@ export type RemoteSessionSummary = {
 
 export type SessionService = {
   listProjectSessions(projectId: string): Promise<RemoteSessionSummary[]>;
+  createProjectSession(projectId: string): Promise<RemoteSessionSummary>;
 };
 
 export type DaemonServer = {
@@ -79,13 +80,19 @@ async function handleHttpRequest(
   }
 
   const projectSessionsMatch = request.url?.match(/^\/v1\/projects\/([^/]+)\/sessions$/);
-  if (request.method === "GET" && projectSessionsMatch) {
+  if ((request.method === "GET" || request.method === "POST") && projectSessionsMatch) {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
 
     const projectId = decodeURIComponent(projectSessionsMatch[1] ?? "");
+    if (request.method === "POST") {
+      const session = await options.sessionService?.createProjectSession(projectId);
+      writeJson(response, 200, { session });
+      return;
+    }
+
     const sessions = await options.sessionService?.listProjectSessions(projectId);
     writeJson(response, 200, { sessions: sessions ?? [] });
     return;
