@@ -189,7 +189,7 @@ describe("remote control extension", () => {
     expect(notifications.at(-1)).toEqual({ message: "Remote control enable failed: fetch failed", type: "error" });
   });
 
-  it("uses configured bind address for TUI control when no local override is set", async () => {
+  it("uses localhost with the configured port for TUI control when no local override is set", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-extension-"));
     try {
       await writeFile(join(root, "config.json"), JSON.stringify({ bindAddress: "100.86.12.34:17373" }));
@@ -207,7 +207,7 @@ describe("remote control extension", () => {
 
       await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-      expect(urls.at(-1)).toBe("http://100.86.12.34:17373/v1/tui/sessions");
+      expect(urls.at(-1)).toBe("http://127.0.0.1:17373/v1/tui/sessions");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

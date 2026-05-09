@@ -148,23 +148,11 @@ Response:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages:
-
-```json
-{ "type": "session_state", "session": { "id": "sess_..." }, "isStreaming": false }
-{ "type": "message_upsert", "message": { "id": "msg_...", "role": "user", "text": "..." } }
-{ "type": "assistant_delta", "messageId": "msg_...", "text": "Hello" }
-{ "type": "tool_status", "toolCallId": "call_...", "name": "bash", "status": "running", "summary": "ls -la" }
-{ "type": "tool_status", "toolCallId": "call_...", "name": "bash", "status": "succeeded" }
-{ "type": "queue_update", "pendingMessageCount": 1 }
-{ "type": "agent_done" }
-{ "type": "session_closed" }
-{ "type": "error", "message": "..." }
-```
+Server messages include an initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors.
 
 ## Pi TUI extension ↔ daemon
 
-The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. It uses the same bearer-token authentication as iOS endpoints for now. It may be HTTP or WebSocket internally, but the logical messages are:
+The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. Loopback TUI requests are accepted without a bearer token; non-loopback callers must provide a valid bearer token. The extension normally calls `127.0.0.1:<configured-port>` even when iOS uses `advertisedBaseUrl` over Tailscale.
 
 ### Pair code creation
 

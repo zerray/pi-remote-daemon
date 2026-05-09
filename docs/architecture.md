@@ -52,11 +52,11 @@ The extension owns live Pi session control. It does not expose a network listene
 The daemon responsibilities are independent of Pi SDK session ownership:
 
 - Serve the HTTP/WebSocket API documented in `docs/interfaces.md`.
-- Enforce device token authentication for iOS requests.
+- Enforce device token authentication for iOS requests and non-loopback TUI control requests.
 - Persist pairing codes, paired device token hashes, and daemon metadata.
 - Track currently activated TUI sessions and group them into projects for iOS display.
 - Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
-- Normalize TUI-forwarded Pi events into app-level stream events.
+- Forward raw TUI Pi events to subscribed iOS WebSocket clients.
 - Broadcast session updates to subscribed iOS WebSocket clients.
 
 The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abort sessions in the MVP.
@@ -68,6 +68,8 @@ A live session controller is represented by a TUI extension control channel, not
 Multiple TUI processes may enable remote control at the same time. Each active session has one owning TUI control channel. The daemon rejects prompt or abort requests for sessions without an active owner.
 
 ## Persistence model
+
+The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 

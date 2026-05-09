@@ -5,7 +5,7 @@ import WebSocket from "ws";
 import { describe, expect, it } from "vitest";
 import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 import { openDaemonStore } from "../src/persistence/daemon-store.js";
-import { startDaemonServer, type StartServerOptions } from "../src/server/http.js";
+import { bindAddressesForConfig, startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
 async function withServer<T>(
   fn: (baseUrl: string) => Promise<T>,
@@ -49,13 +49,32 @@ describe("daemon HTTP server", () => {
     });
   });
 
+  it("binds an additional loopback listener when the configured bind address is not local", () => {
+    expect(bindAddressesForConfig("100.86.12.34:17373")).toEqual(["100.86.12.34:17373", "127.0.0.1:17373"]);
+    expect(bindAddressesForConfig("127.0.0.1:17373")).toEqual(["127.0.0.1:17373"]);
+    expect(bindAddressesForConfig("0.0.0.0:17373")).toEqual(["0.0.0.0:17373"]);
+  });
+
   it("registers and unregisters active TUI sessions from package-internal endpoints", async () => {
     const activeSessions = createActiveSessionRegistry();
 
     await withServer(
       async (baseUrl) => {
-        const unauthorized = await fetch(`${baseUrl}/v1/tui/sessions`, { method: "POST" });
-        expect(unauthorized.status).toBe(401);
+        const registerWithoutToken = await fetch(`${baseUrl}/v1/tui/sessions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            id: "sess_1",
+            piSessionId: "pi_1",
+            project: { id: "proj_1", name: "Example", path: "/repo/example" },
+            sessionFile: "/tmp/session.jsonl",
+            pid: 1234,
+            messageCount: 0,
+            isStreaming: false,
+            updatedAt: "2026-05-09T00:00:00.000Z",
+          }),
+        });
+        expect(registerWithoutToken.status).toBe(200);
 
         const registerResponse = await fetch(`${baseUrl}/v1/tui/sessions`, {
           method: "POST",

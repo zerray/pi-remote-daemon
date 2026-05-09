@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
@@ -76,18 +76,44 @@ export type StartServerOptions = {
 
 type StreamHub = Map<string, Set<WebSocket>>;
 
+export function bindAddressesForConfig(bindAddress: string): string[] {
+  const { host, port } = parseBindAddress(bindAddress);
+  if (isLoopbackHost(host) || isWildcardHost(host)) return [bindAddress];
+  return [bindAddress, `127.0.0.1:${port}`];
+}
+
 export async function startDaemonServer(options: StartServerOptions): Promise<DaemonServer> {
   const streamHub: StreamHub = new Map();
+  const webSockets = new WebSocketServer({ noServer: true });
+  const servers = bindAddressesForConfig(options.config.bindAddress).map(() => createHttpServer(options, streamHub, webSockets));
+  const bindAddresses = bindAddressesForConfig(options.config.bindAddress);
+
+  for (let index = 0; index < servers.length; index += 1) {
+    const { host, port } = parseBindAddress(bindAddresses[index] ?? options.config.bindAddress);
+    await listen(servers[index]!, host, port);
+  }
+
+  const address = servers[0]!.address() as AddressInfo;
+  return {
+    address: `${address.address}:${address.port}`,
+    close: async () => {
+      webSockets.close();
+      await Promise.all(servers.map((server) => closeServer(server)));
+    },
+  };
+}
+
+function createHttpServer(options: StartServerOptions, streamHub: StreamHub, webSockets: WebSocketServer): Server {
   const server = createServer((request, response) => {
     void handleHttpRequest(request, response, options, streamHub);
   });
-  const webSockets = new WebSocketServer({ noServer: true });
-
   server.on("upgrade", (request, socket, head) => {
     void handleUpgrade(request, socket, head, webSockets, options, streamHub);
   });
+  return server;
+}
 
-  const { host, port } = parseBindAddress(options.config.bindAddress);
+async function listen(server: Server, host: string, port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
@@ -95,16 +121,12 @@ export async function startDaemonServer(options: StartServerOptions): Promise<Da
       resolve();
     });
   });
+}
 
-  const address = server.address() as AddressInfo;
-  return {
-    address: `${address.address}:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        webSockets.close();
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  };
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 async function handleHttpRequest(
@@ -123,7 +145,7 @@ async function handleHttpRequest(
   }
 
   if (request.method === "POST" && request.url === "/v1/tui/sessions") {
-    if (!(await isAuthorized(request, options))) {
+    if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -135,7 +157,7 @@ async function handleHttpRequest(
 
   const tuiSessionMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
   if (request.method === "DELETE" && tuiSessionMatch) {
-    if (!(await isAuthorized(request, options))) {
+    if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -149,7 +171,7 @@ async function handleHttpRequest(
 
   const tuiCommandsMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
   if (request.method === "GET" && tuiCommandsMatch) {
-    if (!(await isAuthorized(request, options))) {
+    if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -160,7 +182,7 @@ async function handleHttpRequest(
 
   const tuiEventMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
   if (request.method === "POST" && tuiEventMatch) {
-    if (!(await isAuthorized(request, options))) {
+    if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -318,11 +340,20 @@ async function handleUpgrade(
   });
 }
 
+async function isTuiAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
+  if (isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
+  return isAuthorized(request, options);
+}
+
 async function isAuthorized(request: IncomingMessage, options: StartServerOptions): Promise<boolean> {
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) return false;
   const token = authorization.slice("Bearer ".length);
   return options.authenticateToken ? Boolean(await options.authenticateToken(token)) : false;
+}
+
+function isLoopbackRemoteAddress(address: string | undefined): boolean {
+  return Boolean(address && (address === "::1" || address === "127.0.0.1" || address.startsWith("127.") || address.startsWith("::ffff:127.")));
 }
 
 function nextRequestId(): string {
@@ -336,6 +367,14 @@ function parseBindAddress(bindAddress: string): { host: string; port: number } {
     host: bindAddress.slice(0, index),
     port: Number.parseInt(bindAddress.slice(index + 1), 10),
   };
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1" || host.startsWith("127.");
+}
+
+function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "[::]" || host === "";
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {

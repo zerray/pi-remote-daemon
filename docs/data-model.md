@@ -52,7 +52,7 @@ type DaemonConfig = {
 };
 ```
 
-`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions. `advertisedBaseUrl` is the URL encoded into pairing QR codes and used by iOS for future daemon calls; it must not be a loopback or wildcard address when pairing a separate device.
+`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions. `bindAddress` is the remote-facing listener. When it is a specific non-loopback address, the daemon also listens on `127.0.0.1` on the same port for local TUI control. `advertisedBaseUrl` is the URL encoded into pairing QR codes and used by iOS for future daemon calls; it must not be a loopback or wildcard address when pairing a separate device.
 
 ## Daemon process state
 
@@ -165,7 +165,7 @@ type TuiControlChannel = {
 };
 ```
 
-The control channel is the daemon's route for sending remote prompt and abort commands to the owning TUI extension.
+The control channel is the daemon's route for sending remote prompt and abort commands to the owning TUI extension. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
 
 ## Tool call status
 

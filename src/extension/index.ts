@@ -213,10 +213,9 @@ async function daemonBaseUrl(): Promise<string> {
 
 function bindAddressToBaseUrl(bindAddress: string): string {
   const index = bindAddress.lastIndexOf(":");
-  if (index === -1) return `http://${bindAddress}`;
-  const host = bindAddress.slice(0, index);
+  if (index === -1) return `http://127.0.0.1:17373`;
   const port = bindAddress.slice(index + 1);
-  return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+  return `http://127.0.0.1:${port}`;
 }
 
 async function tuiHeaders(includeContentType = true): Promise<Record<string, string>> {
