@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 
@@ -97,24 +100,27 @@ describe("active TUI session registry", () => {
     expect(registry.takeCommands("sess_1")).toEqual([]);
   });
 
-  it("returns snapshots for active sessions", () => {
+  it("returns snapshots for active sessions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-registry-"));
+    const sessionFile = join(root, "session.jsonl");
     const registry = createActiveSessionRegistry();
-    registry.registerSession({
-      id: "sess_1",
-      piSessionId: "pi_1",
-      project: { id: "proj_1", name: "Example", path: "/repo/example" },
-      sessionFile: "/tmp/session.jsonl",
-      pid: 1234,
-      messageCount: 0,
-      isStreaming: true,
-      updatedAt: "2026-05-09T00:00:00.000Z",
-      entries: [
-        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } },
-        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
-      ],
-    });
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } }),
+        JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }),
+      ].join("\n"));
+      registry.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 0,
+        isStreaming: true,
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      });
 
-    expect(registry.getSessionState("sess_1")).toMatchObject({
+      expect(registry.getSessionState("sess_1")).toMatchObject({
       session: { id: "sess_1", projectId: "proj_1", isActive: true },
       messages: [
         { id: "msg_1", role: "user", text: "hello", createdAt: "2026-05-09T00:00:00.000Z", isStreaming: false },
@@ -123,7 +129,10 @@ describe("active TUI session registry", () => {
       tools: [],
       isStreaming: true,
       pendingMessageCount: 0,
-    });
-    expect(registry.getSessionState("missing")).toBeUndefined();
+      });
+      expect(registry.getSessionState("missing")).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { readSessionTranscriptMessages } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
 import type { ToolCallStatus } from "./types.js";
 
@@ -74,7 +75,6 @@ export const DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS = 5_000;
 
 type StoredActiveSession = ActiveSessionRegistration & {
   summary: ActiveSessionSummary;
-  messages: ChatMessage[];
   tools: ToolCallStatus[];
   pendingMessageCount: number;
   commands: RemoteTuiCommand[];
@@ -105,7 +105,6 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       sessions.set(session.id, {
         ...session,
         summary,
-        messages: messagesFromEntries(session.entries ?? []),
         tools: [],
         pendingMessageCount: 0,
         commands: [],
@@ -147,9 +146,14 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
+      const messages = readSessionTranscriptMessages(session.sessionFile);
       return {
-        session: session.summary,
-        ...recentTranscriptWindow(session.messages, options?.messageLimit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT),
+        session: {
+          ...session.summary,
+          messageCount: messages.length,
+          updatedAt: messages.at(-1)?.createdAt ?? session.summary.updatedAt,
+        },
+        ...recentTranscriptWindow(messages, options?.messageLimit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT),
         tools: session.tools,
         isStreaming: session.isStreaming,
         pendingMessageCount: session.pendingMessageCount,
@@ -160,7 +164,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
-      return olderTranscriptPage(session.messages, beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
+      return olderTranscriptPage(readSessionTranscriptMessages(session.sessionFile), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
     },
 
     enqueueCommand(sessionId, command) {
@@ -180,44 +184,6 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       return commands;
     },
   };
-}
-
-function messagesFromEntries(entries: unknown[]): ChatMessage[] {
-  return entries.flatMap((entry) => {
-    const record = asRecord(entry);
-    if (record.type !== "message") return [];
-    const message = asRecord(record.message);
-    const role = messageRole(message.role);
-    if (!role) return [];
-    return [{
-      id: readString(record.id) ?? `msg_${Math.random().toString(36).slice(2, 10)}`,
-      role,
-      text: messageText(message.content),
-      createdAt: readString(record.timestamp) ?? new Date().toISOString(),
-      isStreaming: false,
-    }];
-  });
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function messageRole(value: unknown): ChatMessage["role"] | undefined {
-  return value === "user" || value === "assistant" || value === "toolResult" || value === "system" ? value : undefined;
-}
-
-function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map((item) => {
-    const record = asRecord(item);
-    return readString(record.text) ?? "";
-  }).join("");
 }
 
 function toSummary(session: ActiveSessionRegistration): ActiveSessionSummary {

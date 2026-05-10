@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import WebSocket from "ws";
@@ -344,78 +344,142 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("returns bounded session snapshots with older message cursors", async () => {
+  it("reads session snapshots from the latest session file contents", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-session-file-http-"));
+    const sessionFile = join(root, "session.jsonl");
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
       id: "sess_1",
       piSessionId: "pi_1",
       project: { id: "proj_1", name: "Example", path: "/repo/example" },
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile,
       pid: 1234,
-      messageCount: 3,
+      messageCount: 1,
       isStreaming: false,
-      updatedAt: "2026-05-09T00:00:03.000Z",
+      updatedAt: "2026-05-09T00:00:01.000Z",
       entries: [
-        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } },
-        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } },
-        { type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } },
+        { type: "message", id: "stale_msg", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "stale" } },
       ],
     });
+    await writeFile(sessionFile, [
+      JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } }),
+      JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } }),
+    ].join("\n"));
 
-    await withServer(
-      async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
-          headers: { authorization: "Bearer test-token" },
-        });
-        const body = (await response.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
+    try {
+      await withServer(
+        async (baseUrl) => {
+          await writeFile(sessionFile, [
+            JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } }),
+            JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } }),
+            JSON.stringify({ type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } }),
+          ].join("\n"));
 
-        expect(response.status).toBe(200);
-        expect(body.messages.map((message) => message.id)).toEqual(["msg_2", "msg_3"]);
-        expect(body.hasOlderMessages).toBe(true);
-        expect(typeof body.olderMessagesCursor).toBe("string");
-      },
-      { activeSessions, authenticateToken: (token) => token === "test-token" },
-    );
+          const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const body = (await response.json()) as { session: { messageCount: number; updatedAt: string }; messages: Array<{ id: string; text: string }>; hasOlderMessages: boolean };
+
+          expect(response.status).toBe(200);
+          expect(body.messages).toEqual([
+            expect.objectContaining({ id: "msg_2", text: "two" }),
+            expect.objectContaining({ id: "msg_3", text: "three" }),
+          ]);
+          expect(body.hasOlderMessages).toBe(true);
+          expect(body.session.messageCount).toBe(3);
+          expect(body.session.updatedAt).toBe("2026-05-09T00:00:03.000Z");
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns bounded session snapshots with older message cursors", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-bounded-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } }),
+        JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } }),
+        JSON.stringify({ type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 3,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:03.000Z",
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const body = (await response.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
+
+          expect(response.status).toBe(200);
+          expect(body.messages.map((message) => message.id)).toEqual(["msg_2", "msg_3"]);
+          expect(body.hasOlderMessages).toBe(true);
+          expect(typeof body.olderMessagesCursor).toBe("string");
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("returns older transcript pages before a cursor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-page-http-"));
+    const sessionFile = join(root, "session.jsonl");
     const activeSessions = createActiveSessionRegistry();
-    activeSessions.registerSession({
-      id: "sess_1",
-      piSessionId: "pi_1",
-      project: { id: "proj_1", name: "Example", path: "/repo/example" },
-      sessionFile: "/tmp/session.jsonl",
-      pid: 1234,
-      messageCount: 4,
-      isStreaming: false,
-      updatedAt: "2026-05-09T00:00:04.000Z",
-      entries: [
-        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } },
-        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } },
-        { type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } },
-        { type: "message", id: "msg_4", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: "four" } },
-      ],
-    });
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } }),
+        JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } }),
+        JSON.stringify({ type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } }),
+        JSON.stringify({ type: "message", id: "msg_4", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: "four" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 4,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:04.000Z",
+      });
 
-    await withServer(
-      async (baseUrl) => {
-        const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
-          headers: { authorization: "Bearer test-token" },
-        });
-        const snapshot = (await snapshotResponse.json()) as { olderMessagesCursor: string };
+      await withServer(
+        async (baseUrl) => {
+          const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const snapshot = (await snapshotResponse.json()) as { olderMessagesCursor: string };
 
-        const pageResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/messages?before=${encodeURIComponent(snapshot.olderMessagesCursor)}&limit=2`, {
-          headers: { authorization: "Bearer test-token" },
-        });
-        const page = (await pageResponse.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
+          const pageResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/messages?before=${encodeURIComponent(snapshot.olderMessagesCursor)}&limit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const page = (await pageResponse.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
 
-        expect(pageResponse.status).toBe(200);
-        expect(page.messages.map((message) => message.id)).toEqual(["msg_1", "msg_2"]);
-        expect(page.hasOlderMessages).toBe(false);
-        expect(page.olderMessagesCursor).toBeNull();
-      },
-      { activeSessions, authenticateToken: (token) => token === "test-token" },
-    );
+          expect(pageResponse.status).toBe(200);
+          expect(page.messages.map((message) => message.id)).toEqual(["msg_1", "msg_2"]);
+          expect(page.hasOlderMessages).toBe(false);
+          expect(page.olderMessagesCursor).toBeNull();
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects invalid transcript page parameters", async () => {
