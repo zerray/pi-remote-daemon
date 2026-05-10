@@ -259,6 +259,8 @@ describe("daemon HTTP server", () => {
         await expect(response.json()).resolves.toEqual({
           session: { id: "sess_1" },
           messages: [],
+          olderMessagesCursor: null,
+          hasOlderMessages: false,
           tools: [],
           isStreaming: false,
           pendingMessageCount: 0,
@@ -274,12 +276,119 @@ describe("daemon HTTP server", () => {
           getSessionState: async (sessionId) => ({
             session: { id: sessionId },
             messages: [],
+            olderMessagesCursor: null,
+            hasOlderMessages: false,
             tools: [],
             isStreaming: false,
             pendingMessageCount: 0,
           }),
         },
       },
+    );
+  });
+
+  it("returns bounded session snapshots with older message cursors", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 3,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:03.000Z",
+      entries: [
+        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } },
+        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } },
+        { type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } },
+      ],
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const body = (await response.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
+
+        expect(response.status).toBe(200);
+        expect(body.messages.map((message) => message.id)).toEqual(["msg_2", "msg_3"]);
+        expect(body.hasOlderMessages).toBe(true);
+        expect(typeof body.olderMessagesCursor).toBe("string");
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("returns older transcript pages before a cursor", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 4,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:04.000Z",
+      entries: [
+        { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } },
+        { type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } },
+        { type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "three" } },
+        { type: "message", id: "msg_4", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: "four" } },
+      ],
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const snapshot = (await snapshotResponse.json()) as { olderMessagesCursor: string };
+
+        const pageResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/messages?before=${encodeURIComponent(snapshot.olderMessagesCursor)}&limit=2`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const page = (await pageResponse.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string | null; hasOlderMessages: boolean };
+
+        expect(pageResponse.status).toBe(200);
+        expect(page.messages.map((message) => message.id)).toEqual(["msg_1", "msg_2"]);
+        expect(page.hasOlderMessages).toBe(false);
+        expect(page.olderMessagesCursor).toBeNull();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects invalid transcript page parameters", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const badLimit = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=0`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const badCursor = await fetch(`${baseUrl}/v1/sessions/sess_1/messages?before=not-a-cursor&limit=1`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(badLimit.status).toBe(400);
+        await expect(badLimit.json()).resolves.toEqual({ error: "invalid_limit" });
+        expect(badCursor.status).toBe(400);
+        await expect(badCursor.json()).resolves.toEqual({ error: "invalid_cursor" });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
   });
 

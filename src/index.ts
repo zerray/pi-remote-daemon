@@ -8,4 +8,5 @@ export * from "./persistence/daemon-store.js";
 export * from "./persistence/schema.js";
 export * from "./server/http.js";
 export * from "./session-index.js";
+export * from "./transcript-pagination.js";
 export * from "./types.js";

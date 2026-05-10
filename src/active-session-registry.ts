@@ -1,3 +1,4 @@
+import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
 import type { ToolCallStatus } from "./types.js";
 
 export type ActiveProject = {
@@ -43,9 +44,8 @@ export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
   | { type: "remote_abort"; requestId: string };
 
-export type ActiveSessionState = {
+export type ActiveSessionState = TranscriptPage & {
   session: ActiveSessionSummary;
-  messages: ChatMessage[];
   tools: ToolCallStatus[];
   isStreaming: boolean;
   pendingMessageCount: number;
@@ -56,7 +56,8 @@ export type ActiveSessionRegistry = {
   unregisterSession(sessionId: string): boolean;
   listProjects(): ActiveProject[];
   listProjectSessions(projectId: string): ActiveSessionSummary[];
-  getSessionState(sessionId: string): ActiveSessionState | undefined;
+  getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
+  getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
   takeCommands(sessionId: string): RemoteTuiCommand[];
 };
@@ -96,16 +97,22 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     },
 
-    getSessionState(sessionId) {
+    getSessionState(sessionId, options) {
       const session = sessions.get(sessionId);
       if (!session) return undefined;
       return {
         session: session.summary,
-        messages: session.messages,
+        ...recentTranscriptWindow(session.messages, options?.messageLimit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT),
         tools: session.tools,
         isStreaming: session.isStreaming,
         pendingMessageCount: session.pendingMessageCount,
       };
+    },
+
+    getSessionMessages(sessionId, beforeCursor, options) {
+      const session = sessions.get(sessionId);
+      if (!session) return undefined;
+      return olderTranscriptPage(session.messages, beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
     },
 
     enqueueCommand(sessionId, command) {

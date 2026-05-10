@@ -3,6 +3,13 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ActiveSessionRegistry } from "../active-session-registry.js";
+import {
+  DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+  decodeTranscriptCursor,
+  InvalidTranscriptCursorError,
+  MAX_TRANSCRIPT_PAGE_LIMIT,
+  type TranscriptPage,
+} from "../transcript-pagination.js";
 import type { DaemonConfig } from "../types.js";
 
 export type RemoteSessionSummary = {
@@ -18,6 +25,8 @@ export type RemoteSessionSummary = {
 export type RemoteSessionState = {
   session: unknown;
   messages: unknown[];
+  olderMessagesCursor: string | null;
+  hasOlderMessages: boolean;
   tools: unknown[];
   isStreaming: boolean;
   pendingMessageCount: number;
@@ -31,7 +40,8 @@ export type PromptSessionRequest = {
 export type SessionService = {
   listProjectSessions?(projectId: string): Promise<RemoteSessionSummary[]>;
   createProjectSession?(projectId: string): Promise<RemoteSessionSummary>;
-  getSessionState?(sessionId: string): Promise<RemoteSessionState>;
+  getSessionState?(sessionId: string, options?: { messageLimit: number }): Promise<RemoteSessionState>;
+  getSessionMessages?(sessionId: string, request: { before: string; limit: number }): Promise<TranscriptPage>;
   promptSession?(sessionId: string, request: PromptSessionRequest): Promise<void>;
   abortSession?(sessionId: string): Promise<void>;
   streamSession?(sessionId: string, send: (event: unknown) => void): Promise<void>;
@@ -135,7 +145,10 @@ async function handleHttpRequest(
   options: StartServerOptions,
   streamHub: StreamHub,
 ): Promise<void> {
-  if (request.method === "GET" && request.url === "/v1/health") {
+  const url = new URL(request.url ?? "/", "http://localhost");
+  const pathname = url.pathname;
+
+  if (request.method === "GET" && pathname === "/v1/health") {
     writeJson(response, 200, {
       status: "ok",
       piVersion: options.piVersion ?? "unknown",
@@ -144,7 +157,7 @@ async function handleHttpRequest(
     return;
   }
 
-  if (request.method === "POST" && request.url === "/v1/tui/sessions") {
+  if (request.method === "POST" && pathname === "/v1/tui/sessions") {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
@@ -155,7 +168,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const tuiSessionMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
+  const tuiSessionMatch = pathname.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
   if (request.method === "DELETE" && tuiSessionMatch) {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -169,7 +182,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const tuiCommandsMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
+  const tuiCommandsMatch = pathname.match(/^\/v1\/tui\/sessions\/([^/]+)\/commands$/);
   if (request.method === "GET" && tuiCommandsMatch) {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -180,7 +193,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const tuiEventMatch = request.url?.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
+  const tuiEventMatch = pathname.match(/^\/v1\/tui\/sessions\/([^/]+)\/events$/);
   if (request.method === "POST" && tuiEventMatch) {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -193,7 +206,7 @@ async function handleHttpRequest(
     return;
   }
 
-  if (request.method === "POST" && request.url === "/v1/pair/claim") {
+  if (request.method === "POST" && pathname === "/v1/pair/claim") {
     try {
       const body = (await readJsonBody(request)) as PairClaimRequest;
       const result = await options.pairService?.claimPairingCode(body);
@@ -208,7 +221,7 @@ async function handleHttpRequest(
     return;
   }
 
-  if (request.method === "GET" && request.url === "/v1/projects") {
+  if (request.method === "GET" && pathname === "/v1/projects") {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
@@ -218,7 +231,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const abortMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/abort$/);
+  const abortMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/abort$/);
   if (request.method === "POST" && abortMatch) {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -238,7 +251,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const promptMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/prompt$/);
+  const promptMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/prompt$/);
   if (request.method === "POST" && promptMatch) {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -264,15 +277,57 @@ async function handleHttpRequest(
     return;
   }
 
-  const sessionMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)$/);
+  const sessionMessagesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
+  if (request.method === "GET" && sessionMessagesMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const limit = parsePositiveLimit(url.searchParams.get("limit"));
+    if (!limit.valid) {
+      writeJson(response, 400, { error: "invalid_limit" });
+      return;
+    }
+    const before = url.searchParams.get("before");
+    if (!before) {
+      writeJson(response, 400, { error: "invalid_cursor" });
+      return;
+    }
+
+    try {
+      decodeTranscriptCursor(before);
+      const sessionId = decodeURIComponent(sessionMessagesMatch[1] ?? "");
+      const page = options.activeSessions?.getSessionMessages(sessionId, before, { limit: limit.value })
+        ?? (await options.sessionService?.getSessionMessages?.(sessionId, { before, limit: limit.value }));
+      if (!page) {
+        writeJson(response, 404, { error: "session_not_found" });
+        return;
+      }
+      writeJson(response, 200, page);
+    } catch (error) {
+      if (error instanceof InvalidTranscriptCursorError) writeJson(response, 400, { error: "invalid_cursor" });
+      else writeJson(response, 500, { error: "internal_error" });
+    }
+    return;
+  }
+
+  const sessionMatch = pathname.match(/^\/v1\/sessions\/([^/]+)$/);
   if (request.method === "GET" && sessionMatch) {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
 
+    const limit = parsePositiveLimit(url.searchParams.get("messageLimit"));
+    if (!limit.valid) {
+      writeJson(response, 400, { error: "invalid_limit" });
+      return;
+    }
+
     const sessionId = decodeURIComponent(sessionMatch[1] ?? "");
-    const state = options.activeSessions?.getSessionState(sessionId) ?? (await options.sessionService?.getSessionState?.(sessionId));
+    const state = options.activeSessions?.getSessionState(sessionId, { messageLimit: limit.value })
+      ?? (await options.sessionService?.getSessionState?.(sessionId, { messageLimit: limit.value }));
     if (!state) {
       writeJson(response, 404, { error: "session_not_found" });
       return;
@@ -281,7 +336,7 @@ async function handleHttpRequest(
     return;
   }
 
-  const projectSessionsMatch = request.url?.match(/^\/v1\/projects\/([^/]+)\/sessions$/);
+  const projectSessionsMatch = pathname.match(/^\/v1\/projects\/([^/]+)\/sessions$/);
   if ((request.method === "GET" || request.method === "POST") && projectSessionsMatch) {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -310,7 +365,8 @@ async function handleUpgrade(
   options: StartServerOptions,
   streamHub: StreamHub,
 ): Promise<void> {
-  const streamMatch = request.url?.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
+  const url = new URL(request.url ?? "/", "http://localhost");
+  const streamMatch = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
   if (!streamMatch) {
     socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
@@ -331,7 +387,7 @@ async function handleUpgrade(
     streamHub.set(sessionId, subscribers);
     webSocket.once("close", () => subscribers.delete(webSocket));
 
-    const activeState = options.activeSessions?.getSessionState(sessionId);
+    const activeState = options.activeSessions?.getSessionState(sessionId, { messageLimit: DEFAULT_TRANSCRIPT_PAGE_LIMIT });
     if (activeState) sendWebSocketJson(webSocket, { type: "session_state", ...activeState });
 
     void options.sessionService?.streamSession?.(sessionId, (event) => {
@@ -358,6 +414,13 @@ function isLoopbackRemoteAddress(address: string | undefined): boolean {
 
 function nextRequestId(): string {
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parsePositiveLimit(rawLimit: string | null): { valid: true; value: number } | { valid: false } {
+  if (rawLimit === null) return { valid: true, value: DEFAULT_TRANSCRIPT_PAGE_LIMIT };
+  const parsed = Number(rawLimit);
+  if (!Number.isInteger(parsed) || parsed <= 0) return { valid: false };
+  return { valid: true, value: Math.min(parsed, MAX_TRANSCRIPT_PAGE_LIMIT) };
 }
 
 function parseBindAddress(bindAddress: string): { host: string; port: number } {
