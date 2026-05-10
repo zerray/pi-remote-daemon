@@ -61,6 +61,23 @@ describe("active TUI session registry", () => {
     expect(registry.touchSession("sess_1")).toBe(false);
   });
 
+  it("prunes active TUI sessions when the owning TUI process exits", () => {
+    const registry = createActiveSessionRegistry({ isProcessRunning: (pid) => pid !== 1234, staleSessionTimeoutMs: 60_000 });
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.pruneInactiveSessions()).toEqual(["sess_1"]);
+    expect(registry.listProjects()).toEqual([]);
+  });
+
   it("queues remote commands for active TUI sessions", () => {
     const registry = createActiveSessionRegistry();
     registry.registerSession({

@@ -17,10 +17,10 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const resetLocalState = (ctx: ExtensionContext) => {
     deactivateLocalSession(ctx, daemonSessionId(ctx), activeSessionIds, pollTimers);
   };
-  const cleanup = (ctx: ExtensionContext) => {
+  const cleanup = async (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     resetLocalState(ctx);
-    void unregisterTuiSession(sessionId).catch(() => undefined);
+    await unregisterTuiSession(sessionId).catch(() => undefined);
   };
 
   registerEventForwarders(pi, forward, cleanup, resetLocalState);
@@ -89,7 +89,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
 function registerEventForwarders(
   pi: ExtensionAPI,
   forward: (event: unknown, ctx: ExtensionContext) => void,
-  cleanup: (ctx: ExtensionContext) => void,
+  cleanup: (ctx: ExtensionContext) => void | Promise<void>,
   resetLocalState: (ctx: ExtensionContext) => void,
 ): void {
   pi.on("session_start", (_event, ctx) => resetLocalState(ctx));

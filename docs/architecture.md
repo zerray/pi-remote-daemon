@@ -41,7 +41,7 @@ The extension responsibilities are session-aware:
 - Register `/remote-control-pair` as the only pair-code creation command and render its pairing link as a QR code plus text fallback.
 - Start the daemon on demand when either command needs it.
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
-- When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after heartbeats stop.
+- When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after the TUI PID exits or heartbeats stop.
 - Forward Pi message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active.
 - Receive daemon-forwarded prompt and abort commands and apply them to the current live TUI runtime through Pi extension APIs.
 
@@ -64,7 +64,7 @@ The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abor
 
 ## Session runtime model
 
-A live session controller is represented by a TUI extension control channel, not a daemon-created Pi runtime. The control channel is the authority for one remote-control-enabled TUI session. If the channel closes or heartbeats stop, the daemon marks the session inactive, removes it from project/session listings, and notifies iOS subscribers.
+A live session controller is represented by a TUI extension control channel, not a daemon-created Pi runtime. The control channel is the authority for one remote-control-enabled TUI session. If the channel closes, the owning TUI PID exits, or heartbeats stop, the daemon marks the session inactive, removes it from project/session listings, and notifies iOS subscribers.
 
 Multiple TUI processes may enable remote control at the same time. Each active session has one owning TUI control channel. The daemon rejects prompt or abort requests for sessions without an active owner.
 

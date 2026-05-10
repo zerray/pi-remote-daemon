@@ -30,7 +30,7 @@ type ExecCall = { command: string; args: string[] };
 
 function createFakePi(execCalls: ExecCall[] = []) {
   const commands: Registered[] = [];
-  const handlers = new Map<string, (event: unknown, ctx: ExtensionTestContext) => void>();
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionTestContext) => void | Promise<unknown>>();
   return {
     commands,
     handlers,
@@ -38,7 +38,7 @@ function createFakePi(execCalls: ExecCall[] = []) {
       registerCommand(name: string, options: Omit<Registered, "name">) {
         commands.push({ name, ...options });
       },
-      on(name: string, handler: (event: unknown, ctx: ExtensionTestContext) => void) {
+      on(name: string, handler: (event: unknown, ctx: ExtensionTestContext) => void | Promise<unknown>) {
         handlers.set(name, handler);
       },
       sendUserMessage: vi.fn(),
@@ -246,12 +246,40 @@ describe("remote control extension", () => {
     remoteControlExtension(pi as never);
     await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-    handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
-    await vi.waitFor(() => expect(fetchCalls.at(-1)).toEqual({
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+
+    expect(fetchCalls.at(-1)).toEqual({
       url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1",
       init: { method: "DELETE" },
-    }));
+    });
     expect(statuses.at(-1)).toEqual({ key: "remote-control", text: undefined });
+  });
+
+  it("awaits proactive deactivation before session shutdown completes", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    let resolveDelete: (() => void) | undefined;
+    const fetchCalls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push(`${init?.method ?? "GET"} ${url}`);
+        if (init?.method === "DELETE") await new Promise<void>((resolve) => { resolveDelete = resolve; });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    let completed = false;
+    const shutdownPromise = Promise.resolve(handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx)).then(() => { completed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(fetchCalls.at(-1)).toBe("DELETE http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1");
+    expect(completed).toBe(false);
+    resolveDelete?.();
+    await shutdownPromise;
+    expect(completed).toBe(true);
   });
 
   it("deactivates local remote-control state on session start", async () => {

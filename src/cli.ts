@@ -65,7 +65,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     stateDir,
     config,
     authenticateToken: devToken ? (token) => token === devToken || store.authenticateToken(token) : (token) => store.authenticateToken(token),
-    activeSessions: createActiveSessionRegistry(),
+    activeSessions: createActiveSessionRegistry({ isProcessRunning }),
     pairService: {
       createPairingCode: () => store.createPairingCode(new Date(), 5 * 60_000),
       claimPairingCode: async (request) => {

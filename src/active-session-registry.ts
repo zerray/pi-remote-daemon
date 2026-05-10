@@ -67,6 +67,7 @@ export type ActiveSessionRegistry = {
 export type ActiveSessionRegistryOptions = {
   now?: () => number;
   staleSessionTimeoutMs?: number;
+  isProcessRunning?: (pid: number) => boolean;
 };
 
 export const DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS = 5_000;
@@ -84,12 +85,13 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
   const sessions = new Map<string, StoredActiveSession>();
   const now = options.now ?? Date.now;
   const staleSessionTimeoutMs = options.staleSessionTimeoutMs ?? DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS;
+  const isProcessRunning = options.isProcessRunning;
 
   const pruneInactiveSessions = (): string[] => {
     const cutoff = now() - staleSessionTimeoutMs;
     const removed: string[] = [];
     for (const [sessionId, session] of sessions) {
-      if (session.lastSeenAtMs <= cutoff) {
+      if (session.lastSeenAtMs <= cutoff || (isProcessRunning ? !isProcessRunning(session.pid) : false)) {
         sessions.delete(sessionId);
         removed.push(sessionId);
       }
