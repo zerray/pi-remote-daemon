@@ -147,12 +147,26 @@ An active TUI session is owned by one Pi extension control channel. It is remove
 type SessionSnapshot = {
   session: ActiveTuiSession;
   messages: ChatMessage[];
+  olderMessagesCursor?: string;
+  hasOlderMessages: boolean;
   tools: ToolCallStatus[];
   pendingMessageCount: number;
 };
 ```
 
-The daemon keeps an in-memory snapshot for active sessions so newly connected iOS clients can render current state before incremental events arrive.
+The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render current state before incremental events arrive. Older transcript history is loaded through explicit transcript page requests.
+
+## Transcript page
+
+```ts
+type TranscriptPage = {
+  messages: ChatMessage[];
+  olderMessagesCursor?: string;
+  hasOlderMessages: boolean;
+};
+```
+
+Transcript pages contain bounded message windows ordered oldest-to-newest. Cursor values are daemon-owned and opaque to clients.
 
 ## TUI control channel
 

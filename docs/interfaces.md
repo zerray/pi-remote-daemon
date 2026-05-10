@@ -97,9 +97,68 @@ Response:
 
 `POST /v1/projects/{projectId}/sessions` returns `405 method_not_allowed`. New sessions are created in the Pi TUI, then made visible by running `/remote-control`.
 
-`GET /v1/sessions/{sessionId}`
+`GET /v1/sessions/{sessionId}?messageLimit={limit}`
 
-Returns the daemon's current snapshot for an active remote-control TUI session.
+Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
+
+Response:
+
+```json
+{
+  "session": {
+    "id": "sess_...",
+    "piSessionId": "019e0a73-...",
+    "projectId": "proj_...",
+    "name": "Refactor auth module",
+    "path": "/Users/zerray/.pi/agent/sessions/...jsonl",
+    "updatedAt": "2026-05-09T09:47:00.000Z",
+    "messageCount": 4200,
+    "isActive": true
+  },
+  "messages": [
+    {
+      "id": "msg_...",
+      "role": "assistant",
+      "text": "Recent answer text",
+      "createdAt": "2026-05-09T09:47:00.000Z",
+      "toolCallId": null,
+      "isStreaming": false
+    }
+  ],
+  "olderMessagesCursor": "opaque-cursor-or-null",
+  "hasOlderMessages": true,
+  "tools": [],
+  "isStreaming": false,
+  "pendingMessageCount": 0
+}
+```
+
+`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages.
+
+`GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
+
+Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
+
+Response:
+
+```json
+{
+  "messages": [
+    {
+      "id": "msg_older",
+      "role": "user",
+      "text": "Older prompt text",
+      "createdAt": "2026-05-09T09:30:00.000Z",
+      "toolCallId": null,
+      "isStreaming": false
+    }
+  ],
+  "olderMessagesCursor": "next-older-cursor-or-null",
+  "hasOlderMessages": true
+}
+```
+
+`messages` are ordered oldest-to-newest within the returned page so the app can prepend the page while preserving transcript order.
 
 `POST /v1/sessions/{sessionId}/prompt`
 
@@ -148,7 +207,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages include an initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors.
+Server messages include bounded initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors. The stream must not send full historical transcript payloads. Full or older history is loaded only through the HTTP session snapshot and transcript-page endpoints.
 
 ## Pi TUI extension ↔ daemon
 

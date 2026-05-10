@@ -56,7 +56,8 @@ The daemon responsibilities are independent of Pi SDK session ownership:
 - Persist pairing codes, paired device token hashes, and daemon metadata.
 - Track currently activated TUI sessions and group them into projects for iOS display.
 - Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
-- Forward raw TUI Pi events to subscribed iOS WebSocket clients.
+- Serve bounded recent transcript snapshots and older transcript pages for active sessions.
+- Forward live raw TUI Pi events to subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
 - Broadcast session updates to subscribed iOS WebSocket clients.
 
 The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abort sessions in the MVP.
@@ -70,6 +71,8 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 ## Persistence model
 
 The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
+
+Session detail reads are bounded: the daemon returns a recent transcript window first, then serves older transcript pages on request. WebSocket streams are for live updates and must not carry unbounded session history.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 
