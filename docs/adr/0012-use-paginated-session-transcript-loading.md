@@ -6,7 +6,7 @@ Use paginated session transcript loading
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
