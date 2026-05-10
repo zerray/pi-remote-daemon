@@ -146,27 +146,75 @@ An active TUI session is owned by one Pi extension control channel. It is remove
 ```ts
 type SessionSnapshot = {
   session: ActiveTuiSession;
-  messages: ChatMessage[];
+  messages: TranscriptMessage[];
   olderMessagesCursor?: string;
   hasOlderMessages: boolean;
   tools: ToolCallStatus[];
+  isStreaming: boolean;
   pendingMessageCount: number;
 };
 ```
 
-The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time. Older transcript history is loaded through explicit transcript page requests.
+The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time and normalized into `TranscriptMessage` values. Older transcript history is loaded through explicit transcript page requests.
+
+## Transcript message
+
+```ts
+type TranscriptMessage = {
+  id: string;
+  role: "user" | "assistant" | "toolResult" | "system";
+  content: TranscriptContentBlock[];
+  text: string;
+  createdAt: string;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+  isStreaming: boolean;
+};
+
+type TranscriptContentBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "toolCall"; id: string; name: string; arguments: unknown }
+  | { type: "image"; data: string; mimeType: string };
+```
+
+`TranscriptMessage` is the public transcript shape used by both HTTP transcript reads and WebSocket live updates. `content` preserves structured Pi message blocks. `text` is a display summary derived from text-like blocks and kept for clients that need a simple preview. Tool-result messages carry `toolCallId`, `toolName`, and `isError` when present.
 
 ## Transcript page
 
 ```ts
 type TranscriptPage = {
-  messages: ChatMessage[];
+  messages: TranscriptMessage[];
   olderMessagesCursor?: string;
   hasOlderMessages: boolean;
 };
 ```
 
-Transcript pages contain bounded message windows ordered oldest-to-newest by `createdAt` and are derived from the session's Pi JSONL `sessionFile` at request time. Cursor values are generated from the oldest loaded message's `createdAt` timestamp, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `ChatMessage.id`.
+Transcript pages contain bounded message windows ordered oldest-to-newest by `createdAt` and are derived from the session's Pi JSONL `sessionFile` at request time. Cursor values are generated from the oldest loaded message's `createdAt` timestamp, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `TranscriptMessage.id`.
+
+## Transcript stream event
+
+```ts
+type TranscriptStreamEvent =
+  | { type: "session_state"; state: SessionSnapshot }
+  | { type: "transcript_message_start"; message: TranscriptMessage }
+  | { type: "transcript_message_patch"; messageId: string; contentIndex?: number; patch: TranscriptMessagePatch }
+  | { type: "transcript_message_end"; message: TranscriptMessage }
+  | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+  | { type: "tool_execution_update"; toolCallId: string; toolName: string; partialResult: unknown }
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result?: unknown; isError: boolean }
+  | { type: "session_closed" }
+  | { type: "error"; error: string };
+
+type TranscriptMessagePatch =
+  | { type: "text_delta"; delta: string }
+  | { type: "thinking_delta"; delta: string }
+  | { type: "toolCall"; toolCall: { type: "toolCall"; id: string; name: string; arguments: unknown } }
+  | { type: "replace"; message: TranscriptMessage };
+```
+
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events but do not expose raw Pi event payloads.
 
 ## TUI control channel
 
@@ -183,4 +231,4 @@ The control channel is the daemon's route for sending remote prompt and abort co
 
 ## Tool state
 
-`tools` is currently an empty array in session snapshots. Tool execution details are forwarded as raw Pi TUI events on the WebSocket stream.
+`tools` is a compact snapshot of active or recent tool execution state associated by `toolCallId`. Tool-call declarations are preserved inside assistant `TranscriptMessage.content`; tool execution progress and completion are delivered on the WebSocket stream as normalized tool events.

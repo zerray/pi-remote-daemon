@@ -119,9 +119,13 @@ Response:
     {
       "id": "msg_...",
       "role": "assistant",
+      "content": [
+        { "type": "thinking", "thinking": "Checking the project structure..." },
+        { "type": "toolCall", "id": "call_...", "name": "bash", "arguments": { "command": "ls" } },
+        { "type": "text", "text": "Recent answer text" }
+      ],
       "text": "Recent answer text",
       "createdAt": "2026-05-09T09:47:00.000Z",
-      "toolCallId": null,
       "isStreaming": false
     }
   ],
@@ -133,7 +137,7 @@ Response:
 }
 ```
 
-`messages` are ordered oldest-to-newest within the returned window and represent transcript data persisted in the Pi session file at request time. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp. The cursor is encoded by the daemon and treated as opaque by clients.
+`messages` are ordered oldest-to-newest within the returned window and represent transcript data persisted in the Pi session file at request time. Each item uses the same `TranscriptMessage` shape as live stream message events. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp. The cursor is encoded by the daemon and treated as opaque by clients.
 
 `GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
 
@@ -147,9 +151,9 @@ Response:
     {
       "id": "msg_older",
       "role": "user",
+      "content": [{ "type": "text", "text": "Older prompt text" }],
       "text": "Older prompt text",
       "createdAt": "2026-05-09T09:30:00.000Z",
-      "toolCallId": null,
       "isStreaming": false
     }
   ],
@@ -159,6 +163,29 @@ Response:
 ```
 
 `messages` are ordered oldest-to-newest within the returned page so the app can prepend the page while preserving transcript order. The daemon must not include duplicate message IDs within a single response. Pi Relay must still de-duplicate merged pages and live stream updates by message `id` because page requests and live events can overlap.
+
+Public transcript messages use this shape:
+
+```ts
+type TranscriptMessage = {
+  id: string;
+  role: "user" | "assistant" | "toolResult" | "system";
+  content: Array<
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string }
+    | { type: "toolCall"; id: string; name: string; arguments: unknown }
+    | { type: "image"; data: string; mimeType: string }
+  >;
+  text: string;
+  createdAt: string;
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+  isStreaming: boolean;
+};
+```
+
+`content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available.
 
 `POST /v1/sessions/{sessionId}/prompt`
 
@@ -207,7 +234,42 @@ Response:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages include bounded initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors. The stream must not send full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+
+Initial state:
+
+```json
+{
+  "type": "session_state",
+  "state": {
+    "session": { "id": "sess_...", "isActive": true },
+    "messages": [],
+    "olderMessagesCursor": null,
+    "hasOlderMessages": false,
+    "tools": [],
+    "isStreaming": false,
+    "pendingMessageCount": 0
+  }
+}
+```
+
+Message lifecycle events:
+
+```json
+{ "type": "transcript_message_start", "message": { "id": "msg_...", "role": "assistant", "content": [], "text": "", "createdAt": "2026-05-09T09:47:00.000Z", "isStreaming": true } }
+{ "type": "transcript_message_patch", "messageId": "msg_...", "contentIndex": 0, "patch": { "type": "thinking_delta", "delta": "Checking..." } }
+{ "type": "transcript_message_patch", "messageId": "msg_...", "contentIndex": 1, "patch": { "type": "toolCall", "toolCall": { "type": "toolCall", "id": "call_...", "name": "bash", "arguments": { "command": "ls" } } } }
+{ "type": "transcript_message_patch", "messageId": "msg_...", "contentIndex": 2, "patch": { "type": "text_delta", "delta": "Done." } }
+{ "type": "transcript_message_end", "message": { "id": "msg_...", "role": "assistant", "content": [{ "type": "text", "text": "Done." }], "text": "Done.", "createdAt": "2026-05-09T09:47:02.000Z", "isStreaming": false } }
+```
+
+Tool execution events:
+
+```json
+{ "type": "tool_execution_start", "toolCallId": "call_...", "toolName": "bash", "args": { "command": "ls" } }
+{ "type": "tool_execution_update", "toolCallId": "call_...", "toolName": "bash", "partialResult": { "content": [{ "type": "text", "text": "partial output" }] } }
+{ "type": "tool_execution_end", "toolCallId": "call_...", "toolName": "bash", "result": { "content": [{ "type": "text", "text": "final output" }] }, "isError": false }
+```
 
 ## Pi TUI extension ↔ daemon
 
@@ -256,18 +318,9 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 ### TUI-to-daemon events
 
-While active, the extension forwards raw Pi extension events. The daemon broadcasts them to iOS WebSocket subscribers without normalization in the current MVP:
+While active, the extension forwards Pi extension events to the daemon over the package-internal control interface. These raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-```json
-{ "type": "message_start", "message": { "id": "msg_...", "role": "user" } }
-{ "type": "message_update", "message": { "id": "msg_..." }, "assistantMessageEvent": { "type": "text_delta", "text": "..." } }
-{ "type": "message_end", "message": { "id": "msg_...", "role": "assistant" } }
-{ "type": "tool_execution_start", "toolCallId": "call_...", "toolName": "bash", "args": {} }
-{ "type": "tool_execution_update", "toolCallId": "call_...", "toolName": "bash", "partialResult": {} }
-{ "type": "tool_execution_end", "toolCallId": "call_...", "toolName": "bash", "isError": false }
-{ "type": "agent_start" }
-{ "type": "agent_end", "messages": [] }
-```
+Accepted internal event kinds include message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, and session lifecycle events emitted by the Pi extension API.
 
 ### Daemon-to-TUI commands
 
@@ -291,4 +344,4 @@ The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is
 | List remote sessions | Daemon active TUI session registry. |
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
-| Stream events | Raw Pi event → TUI extension → daemon → iOS WebSocket. |
+| Stream events | Raw Pi event → TUI extension → daemon normalization → iOS WebSocket normalized transcript event. |

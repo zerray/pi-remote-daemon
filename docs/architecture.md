@@ -42,7 +42,7 @@ The extension responsibilities are session-aware:
 - Start the daemon on demand when either command needs it.
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
 - When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after the TUI PID exits or heartbeats stop.
-- Forward Pi message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active.
+- Forward Pi message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization.
 - Receive daemon-forwarded prompt and abort commands and apply them to the current live TUI runtime through Pi extension APIs.
 
 The extension owns live Pi session control. It does not expose a network listener to iOS.
@@ -56,8 +56,8 @@ The daemon responsibilities are independent of Pi SDK session ownership:
 - Persist pairing codes, paired device token hashes, and daemon metadata.
 - Track currently activated TUI sessions and group them into projects for iOS display.
 - Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
-- Serve bounded recent transcript snapshots and older transcript pages for active sessions by reading Pi session JSONL files.
-- Forward live raw TUI Pi events to subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
+- Serve bounded recent transcript snapshots and older transcript pages for active sessions by reading Pi session JSONL files and normalizing entries into public `TranscriptMessage` values.
+- Normalize live TUI Pi events into public transcript stream events for subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
 - Broadcast session updates to subscribed iOS WebSocket clients.
 
 The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abort sessions in the MVP.
@@ -72,7 +72,7 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 
 The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
 
-Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. WebSocket streams are for live updates and must not carry unbounded session history.
+Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. HTTP transcript reads and WebSocket live updates expose the same public `TranscriptMessage` shape. WebSocket streams are for normalized live updates and must not carry unbounded session history.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 
