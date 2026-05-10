@@ -99,7 +99,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}?messageLimit={limit}`
 
-Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window read from the session's Pi JSONL `sessionFile`. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -133,11 +133,11 @@ Response:
 }
 ```
 
-`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp. The cursor is encoded by the daemon and treated as opaque by clients.
+`messages` are ordered oldest-to-newest within the returned window and represent transcript data persisted in the Pi session file at request time. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp. The cursor is encoded by the daemon and treated as opaque by clients.
 
 `GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
 
-Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive timestamp upper bound, so returned messages satisfy `createdAt < cursor.createdAt`. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the next older transcript page from the session's Pi JSONL `sessionFile` before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive timestamp upper bound, so returned messages satisfy `createdAt < cursor.createdAt`. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -207,7 +207,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages include bounded initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors. The stream must not send full historical transcript payloads. Full or older history is loaded only through the HTTP session snapshot and transcript-page endpoints.
+Server messages include bounded initial `session_state`, raw Pi TUI extension events while the session is active, `session_closed`, and errors. The stream must not send full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
 ## Pi TUI extension ↔ daemon
 

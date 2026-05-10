@@ -56,7 +56,7 @@ The daemon responsibilities are independent of Pi SDK session ownership:
 - Persist pairing codes, paired device token hashes, and daemon metadata.
 - Track currently activated TUI sessions and group them into projects for iOS display.
 - Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
-- Serve bounded recent transcript snapshots and older transcript pages for active sessions.
+- Serve bounded recent transcript snapshots and older transcript pages for active sessions by reading Pi session JSONL files.
 - Forward live raw TUI Pi events to subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
 - Broadcast session updates to subscribed iOS WebSocket clients.
 
@@ -72,7 +72,7 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 
 The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
 
-Session detail reads are bounded: the daemon returns a recent transcript window first, then serves older transcript pages on request. WebSocket streams are for live updates and must not carry unbounded session history.
+Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. WebSocket streams are for live updates and must not carry unbounded session history.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 
@@ -82,7 +82,7 @@ Durable daemon-owned files:
 - `daemon.sqlite`: SQLite database for paired devices, token hashes, pairing codes, and metadata.
 - `daemon.lock`: singleton lock file containing the daemon PID.
 
-Active TUI sessions are process state, not durable daemon state. Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon may keep in-memory snapshots for currently active sessions so newly connected iOS clients can render current state.
+Active TUI sessions are process state, not durable daemon state. Pi session transcripts remain in Pi's own JSONL session files under Pi's session directory. The daemon reads those files for HTTP transcript snapshots and pages instead of maintaining a duplicate completed-transcript snapshot in memory.
 
 ## Installation model
 

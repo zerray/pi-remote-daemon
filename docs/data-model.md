@@ -41,7 +41,7 @@ create table pairing_codes (
 );
 ```
 
-Pairing codes and device token hashes are durable. Active session registry entries are rebuilt by currently running Pi TUI extensions after the user enables `/remote-control`.
+Pairing codes and device token hashes are durable. Active session registry entries are rebuilt by currently running Pi TUI extensions after the user enables `/remote-control`. Completed transcript history is read from Pi session JSONL files, not stored in daemon SQLite or active registry memory.
 
 ## Config file
 
@@ -139,7 +139,7 @@ type ActiveTuiSession = {
 };
 ```
 
-An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads.
 
 ## Session snapshot
 
@@ -154,7 +154,7 @@ type SessionSnapshot = {
 };
 ```
 
-The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render current state before incremental events arrive. Older transcript history is loaded through explicit transcript page requests.
+The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time. Older transcript history is loaded through explicit transcript page requests.
 
 ## Transcript page
 
@@ -166,7 +166,7 @@ type TranscriptPage = {
 };
 ```
 
-Transcript pages contain bounded message windows ordered oldest-to-newest by `createdAt`. Cursor values are generated from the oldest loaded message's `createdAt` timestamp, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `ChatMessage.id`.
+Transcript pages contain bounded message windows ordered oldest-to-newest by `createdAt` and are derived from the session's Pi JSONL `sessionFile` at request time. Cursor values are generated from the oldest loaded message's `createdAt` timestamp, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `ChatMessage.id`.
 
 ## TUI control channel
 
