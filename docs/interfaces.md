@@ -133,11 +133,11 @@ Response:
 }
 ```
 
-`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages.
+`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp plus `id` as a tie-breaker. The cursor is encoded by the daemon and treated as opaque by clients.
 
 `GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
 
-Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive upper bound of `(createdAt, id)`, so returned messages satisfy `createdAt < cursor.createdAt`, or `createdAt == cursor.createdAt && id < cursor.id` when multiple messages share the same timestamp. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -158,7 +158,7 @@ Response:
 }
 ```
 
-`messages` are ordered oldest-to-newest within the returned page so the app can prepend the page while preserving transcript order.
+`messages` are ordered oldest-to-newest within the returned page so the app can prepend the page while preserving transcript order. The daemon must not include duplicate message IDs within a single response. Pi Relay must still de-duplicate merged pages and live stream updates by message `id` because page requests and live events can overlap.
 
 `POST /v1/sessions/{sessionId}/prompt`
 

@@ -166,7 +166,7 @@ type TranscriptPage = {
 };
 ```
 
-Transcript pages contain bounded message windows ordered oldest-to-newest. Cursor values are daemon-owned and opaque to clients.
+Transcript pages contain bounded message windows ordered oldest-to-newest by `(createdAt, id)`. Cursor values are generated from the oldest loaded message's chronological position (`createdAt` plus `id` as a tie-breaker), are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `ChatMessage.id`.
 
 ## TUI control channel
 
