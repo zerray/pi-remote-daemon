@@ -106,7 +106,7 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("returns registered TUI sessions for resume synchronization", async () => {
+  it("does not expose TUI session resume synchronization", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
       id: "sess_1",
@@ -125,8 +125,8 @@ describe("daemon HTTP server", () => {
           headers: { authorization: "Bearer test-token" },
         });
 
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toMatchObject({ session: { id: "sess_1", projectId: "proj_1" } });
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toEqual({ error: "not_found" });
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );

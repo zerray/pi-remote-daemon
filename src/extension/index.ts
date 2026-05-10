@@ -14,16 +14,16 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) void postTuiEvent(sessionId, event);
   };
+  const resetLocalState = (ctx: ExtensionContext) => {
+    deactivateLocalSession(ctx, daemonSessionId(ctx), activeSessionIds, pollTimers);
+  };
   const cleanup = (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
-    deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
+    resetLocalState(ctx);
     void unregisterTuiSession(sessionId).catch(() => undefined);
   };
-  const sync = (ctx: ExtensionCommandContext) => {
-    void syncRemoteControlStatus(pi, ctx, activeSessionIds, pollTimers).catch(() => undefined);
-  };
 
-  registerEventForwarders(pi, forward, cleanup, sync);
+  registerEventForwarders(pi, forward, cleanup, resetLocalState);
 
   pi.registerCommand("remote-control", {
     description: "Toggle Pi remote control for this TUI session",
@@ -90,9 +90,9 @@ function registerEventForwarders(
   pi: ExtensionAPI,
   forward: (event: unknown, ctx: ExtensionContext) => void,
   cleanup: (ctx: ExtensionContext) => void,
-  sync: (ctx: ExtensionCommandContext) => void,
+  resetLocalState: (ctx: ExtensionContext) => void,
 ): void {
-  pi.on("session_start", (_event, ctx) => sync(ctx as ExtensionCommandContext));
+  pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
   pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
   pi.on("message_start", forward);
   pi.on("message_update", forward);
@@ -117,27 +117,6 @@ async function unregisterTuiSession(sessionId: string): Promise<void> {
     method: "DELETE",
     headers: await tuiHeaders(false),
   });
-}
-
-async function syncRemoteControlStatus(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  activeSessionIds: Set<string>,
-  pollTimers: Map<string, NodeJS.Timeout>,
-): Promise<void> {
-  const sessionId = daemonSessionId(ctx);
-  deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
-  const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, {
-    headers: await tuiHeaders(false),
-  });
-  if (!response.ok) return;
-
-  const registerResponse = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
-    method: "POST",
-    headers: await tuiHeaders(),
-    body: JSON.stringify(toRegistration(ctx)),
-  });
-  if (registerResponse.ok) activateLocalSession(pi, ctx, sessionId, activeSessionIds, pollTimers);
 }
 
 function activateLocalSession(

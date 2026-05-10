@@ -177,17 +177,6 @@ async function handleHttpRequest(
   }
 
   const tuiSessionMatch = pathname.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
-  if (request.method === "GET" && tuiSessionMatch) {
-    if (!(await isTuiAuthorized(request, options))) {
-      writeJson(response, 401, { error: "unauthorized" });
-      return;
-    }
-    const sessionId = decodeURIComponent(tuiSessionMatch[1] ?? "");
-    const session = options.activeSessions?.getRegisteredSession(sessionId);
-    writeJson(response, session ? 200 : 404, session ? { session } : { error: "session_not_found" });
-    return;
-  }
-
   if (request.method === "DELETE" && tuiSessionMatch) {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });

@@ -254,41 +254,41 @@ describe("remote control extension", () => {
     expect(statuses.at(-1)).toEqual({ key: "remote-control", text: undefined });
   });
 
-  it("syncs remote-control status on resumed active sessions", async () => {
-    const { pi, handlers } = createFakePi();
+  it("deactivates local remote-control state on session start", async () => {
+    const { pi, commands, handlers } = createFakePi();
     const { ctx, statuses } = createContext();
-    const fetchCalls: unknown[] = [];
+    const fetchCalls: Array<{ url: string; init: { method?: string; body?: unknown } }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
-        if (init?.method === "POST") return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
         return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
       }),
     );
     remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
     handlers.get("session_start")?.({ type: "session_start", reason: "resume" }, ctx);
+    handlers.get("message_start")?.({ type: "message_start", message: { id: "msg_1", role: "user" } }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await vi.waitFor(() => expect(statuses.at(-1)).toEqual({ key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" }));
-    expect(fetchCalls).toEqual([
-      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1", init: { method: undefined, body: undefined } },
-      {
-        url: "http://127.0.0.1:17373/v1/tui/sessions",
-        init: { method: "POST", body: expect.objectContaining({ id: "sess_pi_1", piSessionId: "pi_1" }) },
-      },
-    ]);
+    expect(statuses.at(-1)).toEqual({ key: "remote-control", text: undefined });
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]?.url).toBe("http://127.0.0.1:17373/v1/tui/sessions");
   });
 
-  it("clears status on session start when the daemon has no active registration", async () => {
+  it("does not automatically re-enable remote control on resumed sessions", async () => {
     const { pi, handlers } = createFakePi();
     const { ctx, statuses } = createContext();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "session_not_found" }), { status: 404 })));
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
     remoteControlExtension(pi as never);
 
-    handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
+    handlers.get("session_start")?.({ type: "session_start", reason: "resume" }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await vi.waitFor(() => expect(statuses).toEqual([{ key: "remote-control", text: undefined }]));
+    expect(statuses).toEqual([{ key: "remote-control", text: undefined }]);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("toggles off an already registered TUI session", async () => {

@@ -54,7 +54,6 @@ export type ActiveSessionState = TranscriptPage & {
 export type ActiveSessionRegistry = {
   registerSession(session: ActiveSessionRegistration): ActiveSessionSummary;
   unregisterSession(sessionId: string): boolean;
-  getRegisteredSession(sessionId: string): ActiveSessionSummary | undefined;
   touchSession(sessionId: string): boolean;
   pruneInactiveSessions(): string[];
   listProjects(): ActiveProject[];
@@ -115,11 +114,6 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
 
     unregisterSession(sessionId) {
       return sessions.delete(sessionId);
-    },
-
-    getRegisteredSession(sessionId) {
-      pruneInactiveSessions();
-      return sessions.get(sessionId)?.summary;
     },
 
     touchSession(sessionId) {
