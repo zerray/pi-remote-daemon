@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import remoteControlExtension, { handleRemoteCommand } from "../src/extension/index.js";
+import remoteControlExtension, { enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
   name: string;
@@ -338,6 +338,24 @@ describe("remote control extension", () => {
 
     expect(fetchCalls.at(-1)).toEqual({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1", init: { method: "DELETE" } });
     expect(notifications.at(-1)).toEqual({ message: "Remote control disabled for this session", type: "info" });
+  });
+
+  it("enriches message events with stable session entry ids before daemon normalization", () => {
+    const event = { type: "message_update", message: { role: "assistant", timestamp: 1778284801000, content: [{ type: "text", text: "hello" }] }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" } };
+    const ctx = {
+      sessionManager: {
+        getEntries: () => [
+          { type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", timestamp: 1778284801000, content: [{ type: "text", text: "hello" }] } },
+        ],
+      },
+    };
+
+    expect(enrichTuiEventForDaemon(event, ctx as never)).toEqual({
+      ...event,
+      id: "msg_1",
+      timestamp: "2026-05-09T00:00:01.000Z",
+      message: { ...event.message, id: "msg_1" },
+    });
   });
 
   it("forwards TUI events while remote control is active", async () => {

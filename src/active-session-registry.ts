@@ -32,15 +32,6 @@ export type ActiveSessionSummary = {
   isActive: boolean;
 };
 
-export type ChatMessage = {
-  id: string;
-  role: "user" | "assistant" | "toolResult" | "system";
-  text: string;
-  createdAt: string;
-  toolCallId?: string;
-  isStreaming: boolean;
-};
-
 export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
   | { type: "remote_abort"; requestId: string };

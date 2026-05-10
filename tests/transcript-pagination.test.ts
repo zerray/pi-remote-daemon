@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "../src/active-session-registry.js";
+import type { TranscriptMessage } from "../src/types.js";
 import { decodeTranscriptCursor, encodeTranscriptCursor, olderTranscriptPage, recentTranscriptWindow } from "../src/transcript-pagination.js";
 
-function message(id: string, createdAt: string): ChatMessage {
-  return { id, role: "user", text: id, createdAt, isStreaming: false };
+function message(id: string, createdAt: string): TranscriptMessage {
+  return { id, role: "user", content: [{ type: "text", text: id }], text: id, createdAt, isStreaming: false };
 }
 
 describe("transcript pagination", () => {

@@ -12,7 +12,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const pollTimers = new Map<string, NodeJS.Timeout>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
-    if (activeSessionIds.has(sessionId)) void postTuiEvent(sessionId, event);
+    if (activeSessionIds.has(sessionId)) void postTuiEvent(sessionId, enrichTuiEventForDaemon(event, ctx));
   };
   const resetLocalState = (ctx: ExtensionContext) => {
     deactivateLocalSession(ctx, daemonSessionId(ctx), activeSessionIds, pollTimers);
@@ -102,6 +102,41 @@ function registerEventForwarders(
   pi.on("tool_execution_end", forward);
   pi.on("agent_start", forward);
   pi.on("agent_end", forward);
+}
+
+export function enrichTuiEventForDaemon(event: unknown, ctx: Pick<ExtensionContext, "sessionManager">): unknown {
+  const record = asRecord(event);
+  if (record.type !== "message_start" && record.type !== "message_update" && record.type !== "message_end") return event;
+  const message = asRecord(record.message);
+  const entry = [...ctx.sessionManager.getEntries()].reverse().find((candidate) => {
+    const candidateRecord = asRecord(candidate);
+    return candidateRecord.type === "message" && messagesMatch(candidateRecord.message, message);
+  });
+  const entryRecord = asRecord(entry);
+  const id = readString(entryRecord.id);
+  if (!id) return event;
+  return {
+    ...record,
+    id,
+    timestamp: readString(entryRecord.timestamp) ?? record.timestamp,
+    message: { ...message, id },
+  };
+}
+
+function messagesMatch(left: unknown, right: unknown): boolean {
+  const leftRecord = asRecord(left);
+  const rightRecord = asRecord(right);
+  if (leftRecord.role !== rightRecord.role) return false;
+  if (leftRecord.timestamp !== undefined && rightRecord.timestamp !== undefined) return leftRecord.timestamp === rightRecord.timestamp;
+  return JSON.stringify(leftRecord.content) === JSON.stringify(rightRecord.content);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function setRemoteControlStatus(ctx: ExtensionContext): void {

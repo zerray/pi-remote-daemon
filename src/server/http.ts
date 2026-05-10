@@ -10,6 +10,7 @@ import {
   MAX_TRANSCRIPT_PAGE_LIMIT,
   type TranscriptPage,
 } from "../transcript-pagination.js";
+import { normalizeTuiEvent } from "../transcript-stream.js";
 import type { DaemonConfig } from "../types.js";
 
 export type RemoteSessionSummary = {
@@ -216,7 +217,8 @@ async function handleHttpRequest(
       return;
     }
     const event = await readJsonBody(request);
-    streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+    const normalizedEvents = normalizeTuiEvent(event);
+    streamHub.get(sessionId)?.forEach((webSocket) => normalizedEvents.forEach((normalizedEvent) => sendWebSocketJson(webSocket, normalizedEvent)));
     writeJson(response, 200, { accepted: true });
     return;
   }
@@ -403,7 +405,7 @@ async function handleUpgrade(
     webSocket.once("close", () => subscribers.delete(webSocket));
 
     const activeState = options.activeSessions?.getSessionState(sessionId, { messageLimit: DEFAULT_TRANSCRIPT_PAGE_LIMIT });
-    if (activeState) sendWebSocketJson(webSocket, { type: "session_state", ...activeState });
+    if (activeState) sendWebSocketJson(webSocket, { type: "session_state", state: activeState });
 
     void options.sessionService?.streamSession?.(sessionId, (event) => {
       sendWebSocketJson(webSocket, event);

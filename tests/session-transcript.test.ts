@@ -26,8 +26,46 @@ describe("session transcript files", () => {
     ].join("\n"));
 
     expect(readSessionTranscriptMessages(sessionFile)).toEqual([
-      { id: "msg_1", role: "user", text: "hello", createdAt: "2026-05-09T00:00:01.000Z", isStreaming: false },
-      { id: "msg_2", role: "assistant", text: "hi", createdAt: "2026-05-09T00:00:02.000Z", isStreaming: false },
+      { id: "msg_1", role: "user", content: [{ type: "text", text: "hello" }], text: "hello", createdAt: "2026-05-09T00:00:01.000Z", isStreaming: false },
+      { id: "msg_2", role: "assistant", content: [{ type: "text", text: "hi" }], text: "hi", createdAt: "2026-05-09T00:00:02.000Z", isStreaming: false },
+    ]);
+  });
+
+  it("preserves thinking, tool calls, and tool result metadata", async () => {
+    const sessionFile = join(root, "structured-session.jsonl");
+    await writeFile(sessionFile, [
+      JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [
+        { type: "thinking", thinking: "checking" },
+        { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+        { type: "text", text: "done" },
+      ] } }),
+      JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "toolResult", toolCallId: "call_1", toolName: "bash", isError: false, content: [{ type: "text", text: "file.txt" }] } }),
+    ].join("\n"));
+
+    expect(readSessionTranscriptMessages(sessionFile)).toEqual([
+      {
+        id: "msg_1",
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "checking" },
+          { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+          { type: "text", text: "done" },
+        ],
+        text: "done",
+        createdAt: "2026-05-09T00:00:01.000Z",
+        isStreaming: false,
+      },
+      {
+        id: "msg_2",
+        role: "toolResult",
+        content: [{ type: "text", text: "file.txt" }],
+        text: "file.txt",
+        createdAt: "2026-05-09T00:00:02.000Z",
+        toolCallId: "call_1",
+        toolName: "bash",
+        isError: false,
+        isStreaming: false,
+      },
     ]);
   });
 

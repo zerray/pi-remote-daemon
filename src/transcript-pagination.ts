@@ -1,10 +1,10 @@
-import type { ChatMessage } from "./active-session-registry.js";
+import type { TranscriptMessage } from "./types.js";
 
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 100;
 export const MAX_TRANSCRIPT_PAGE_LIMIT = 200;
 
 export type TranscriptPage = {
-  messages: ChatMessage[];
+  messages: TranscriptMessage[];
   olderMessagesCursor: string | null;
   hasOlderMessages: boolean;
 };
@@ -31,11 +31,11 @@ export function decodeTranscriptCursor(cursor: string): string {
   }
 }
 
-export function recentTranscriptWindow(messages: ChatMessage[], limit: number): TranscriptPage {
+export function recentTranscriptWindow(messages: TranscriptMessage[], limit: number): TranscriptPage {
   return pageFromCandidates(normalizeMessages(messages), limit);
 }
 
-export function olderTranscriptPage(messages: ChatMessage[], beforeCursor: string, limit: number): TranscriptPage {
+export function olderTranscriptPage(messages: TranscriptMessage[], beforeCursor: string, limit: number): TranscriptPage {
   const beforeCreatedAt = decodeTranscriptCursor(beforeCursor);
   const normalizedMessages = normalizeMessages(messages);
   if (!normalizedMessages.some((message) => message.createdAt === beforeCreatedAt)) throw new InvalidTranscriptCursorError();
@@ -45,7 +45,7 @@ export function olderTranscriptPage(messages: ChatMessage[], beforeCursor: strin
   );
 }
 
-function pageFromCandidates(candidates: ChatMessage[], limit: number): TranscriptPage {
+function pageFromCandidates(candidates: TranscriptMessage[], limit: number): TranscriptPage {
   const start = Math.max(0, candidates.length - limit);
   const pageMessages = candidates.slice(start);
   const hasOlderMessages = start > 0;
@@ -56,8 +56,8 @@ function pageFromCandidates(candidates: ChatMessage[], limit: number): Transcrip
   };
 }
 
-function normalizeMessages(messages: ChatMessage[]): ChatMessage[] {
-  const byId = new Map<string, ChatMessage>();
+function normalizeMessages(messages: TranscriptMessage[]): TranscriptMessage[] {
+  const byId = new Map<string, TranscriptMessage>();
   for (const message of messages) {
     if (!byId.has(message.id)) byId.set(message.id, message);
   }

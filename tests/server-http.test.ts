@@ -163,7 +163,7 @@ describe("daemon HTTP server", () => {
     );
   });
 
-  it("broadcasts TUI session events to iOS WebSocket subscribers", async () => {
+  it("broadcasts normalized TUI session events to iOS WebSocket subscribers", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
       id: "sess_1",
@@ -186,7 +186,8 @@ describe("daemon HTTP server", () => {
         webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
         await new Promise<void>((resolve) => webSocket.once("open", resolve));
 
-        const event = { type: "message_update", message: { id: "msg_1", role: "assistant" }, assistantMessageEvent: { type: "text_delta", text: "hello" } };
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+        const event = { type: "message_update", message: { id: "msg_1", role: "assistant" }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "hello" } };
         const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
           method: "POST",
           headers: { authorization: "Bearer test-token", "content-type": "application/json" },
@@ -194,7 +195,8 @@ describe("daemon HTTP server", () => {
         });
         expect(response.status).toBe(200);
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
-        expect(messages).toContainEqual(event);
+        expect(messages).toContainEqual({ type: "transcript_message_patch", messageId: "msg_1", contentIndex: 0, patch: { type: "text_delta", delta: "hello" } });
+        expect(messages).not.toContainEqual(event);
         webSocket.close();
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
