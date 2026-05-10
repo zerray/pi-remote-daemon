@@ -35,6 +35,51 @@ describe("active TUI session registry", () => {
     expect(registry.listProjectSessions("proj_1")).toEqual([]);
   });
 
+  it("prunes active TUI sessions when heartbeats stop", () => {
+    let now = 1_000;
+    const registry = createActiveSessionRegistry({ now: () => now, staleSessionTimeoutMs: 5_000 });
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    now = 5_000;
+    expect(registry.touchSession("sess_1")).toBe(true);
+    now = 9_999;
+    expect(registry.pruneInactiveSessions()).toEqual([]);
+    expect(registry.listProjects()).toEqual([{ id: "proj_1", name: "Example", path: "/repo/example" }]);
+
+    now = 10_001;
+    expect(registry.pruneInactiveSessions()).toEqual(["sess_1"]);
+    expect(registry.listProjects()).toEqual([]);
+    expect(registry.touchSession("sess_1")).toBe(false);
+  });
+
+  it("returns active registered sessions for TUI resume sync", () => {
+    let now = 1_000;
+    const registry = createActiveSessionRegistry({ now: () => now, staleSessionTimeoutMs: 5_000 });
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.getRegisteredSession("sess_1")).toMatchObject({ id: "sess_1", projectId: "proj_1" });
+    now = 6_001;
+    expect(registry.getRegisteredSession("sess_1")).toBeUndefined();
+  });
+
   it("queues remote commands for active TUI sessions", () => {
     const registry = createActiveSessionRegistry();
     registry.registerSession({

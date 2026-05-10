@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import WebSocket from "ws";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 import { openDaemonStore } from "../src/persistence/daemon-store.js";
 import { bindAddressesForConfig, startDaemonServer, type StartServerOptions } from "../src/server/http.js";
@@ -103,6 +103,63 @@ describe("daemon HTTP server", () => {
         expect(activeSessions.listProjects()).toEqual([]);
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("returns registered TUI sessions for resume synchronization", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({ session: { id: "sess_1", projectId: "proj_1" } });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("broadcasts session closure when TUI heartbeats expire", async () => {
+    const activeSessions = createActiveSessionRegistry({ staleSessionTimeoutMs: 40 });
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+
+        await vi.waitFor(() => expect(messages).toContainEqual({ type: "session_closed" }), { timeout: 300 });
+        expect(activeSessions.listProjects()).toEqual([]);
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token", sessionSweepIntervalMs: 10 } as Partial<StartServerOptions>,
     );
   });
 

@@ -16,15 +16,14 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   };
   const cleanup = (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
-    clearRemoteControlStatus(ctx);
-    if (!activeSessionIds.has(sessionId)) return;
-    activeSessionIds.delete(sessionId);
-    clearInterval(pollTimers.get(sessionId));
-    pollTimers.delete(sessionId);
+    deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
     void unregisterTuiSession(sessionId).catch(() => undefined);
   };
+  const sync = (ctx: ExtensionCommandContext) => {
+    void syncRemoteControlStatus(pi, ctx, activeSessionIds, pollTimers).catch(() => undefined);
+  };
 
-  registerEventForwarders(pi, forward, cleanup);
+  registerEventForwarders(pi, forward, cleanup, sync);
 
   pi.registerCommand("remote-control", {
     description: "Toggle Pi remote control for this TUI session",
@@ -43,10 +42,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`Remote control disable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
           return;
         }
-        activeSessionIds.delete(sessionId);
-        clearInterval(pollTimers.get(sessionId));
-        pollTimers.delete(sessionId);
-        clearRemoteControlStatus(ctx);
+        deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
         ctx.ui.notify("Remote control disabled for this session", "info");
         return;
       }
@@ -66,11 +62,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(`Remote control enable failed: HTTP ${response.status}`, "error");
         return;
       }
-      activeSessionIds.add(sessionId);
-      setRemoteControlStatus(ctx);
-      const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId).catch(() => undefined), 1000);
-      timer.unref?.();
-      pollTimers.set(sessionId, timer);
+      activateLocalSession(pi, ctx, sessionId, activeSessionIds, pollTimers);
       ctx.ui.notify("Remote control enabled for this session", "info");
     },
   });
@@ -98,8 +90,9 @@ function registerEventForwarders(
   pi: ExtensionAPI,
   forward: (event: unknown, ctx: ExtensionContext) => void,
   cleanup: (ctx: ExtensionContext) => void,
+  sync: (ctx: ExtensionCommandContext) => void,
 ): void {
-  pi.on("session_start", (_event, ctx) => clearRemoteControlStatus(ctx));
+  pi.on("session_start", (_event, ctx) => sync(ctx as ExtensionCommandContext));
   pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
   pi.on("message_start", forward);
   pi.on("message_update", forward);
@@ -124,6 +117,54 @@ async function unregisterTuiSession(sessionId: string): Promise<void> {
     method: "DELETE",
     headers: await tuiHeaders(false),
   });
+}
+
+async function syncRemoteControlStatus(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): Promise<void> {
+  const sessionId = daemonSessionId(ctx);
+  deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
+  const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: await tuiHeaders(false),
+  });
+  if (!response.ok) return;
+
+  const registerResponse = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+    method: "POST",
+    headers: await tuiHeaders(),
+    body: JSON.stringify(toRegistration(ctx)),
+  });
+  if (registerResponse.ok) activateLocalSession(pi, ctx, sessionId, activeSessionIds, pollTimers);
+}
+
+function activateLocalSession(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  sessionId: string,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): void {
+  activeSessionIds.add(sessionId);
+  setRemoteControlStatus(ctx);
+  if (pollTimers.has(sessionId)) return;
+  const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId).catch(() => undefined), 1000);
+  timer.unref?.();
+  pollTimers.set(sessionId, timer);
+}
+
+function deactivateLocalSession(
+  ctx: ExtensionContext,
+  sessionId: string,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): void {
+  activeSessionIds.delete(sessionId);
+  clearInterval(pollTimers.get(sessionId));
+  pollTimers.delete(sessionId);
+  clearRemoteControlStatus(ctx);
 }
 
 async function ensureDaemonStarted(pi: ExtensionAPI): Promise<void> {

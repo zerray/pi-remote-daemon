@@ -54,6 +54,9 @@ export type ActiveSessionState = TranscriptPage & {
 export type ActiveSessionRegistry = {
   registerSession(session: ActiveSessionRegistration): ActiveSessionSummary;
   unregisterSession(sessionId: string): boolean;
+  getRegisteredSession(sessionId: string): ActiveSessionSummary | undefined;
+  touchSession(sessionId: string): boolean;
+  pruneInactiveSessions(): string[];
   listProjects(): ActiveProject[];
   listProjectSessions(projectId: string): ActiveSessionSummary[];
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
@@ -62,21 +65,51 @@ export type ActiveSessionRegistry = {
   takeCommands(sessionId: string): RemoteTuiCommand[];
 };
 
+export type ActiveSessionRegistryOptions = {
+  now?: () => number;
+  staleSessionTimeoutMs?: number;
+};
+
+export const DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS = 5_000;
+
 type StoredActiveSession = ActiveSessionRegistration & {
   summary: ActiveSessionSummary;
   messages: ChatMessage[];
   tools: ToolCallStatus[];
   pendingMessageCount: number;
   commands: RemoteTuiCommand[];
+  lastSeenAtMs: number;
 };
 
-export function createActiveSessionRegistry(): ActiveSessionRegistry {
+export function createActiveSessionRegistry(options: ActiveSessionRegistryOptions = {}): ActiveSessionRegistry {
   const sessions = new Map<string, StoredActiveSession>();
+  const now = options.now ?? Date.now;
+  const staleSessionTimeoutMs = options.staleSessionTimeoutMs ?? DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS;
+
+  const pruneInactiveSessions = (): string[] => {
+    const cutoff = now() - staleSessionTimeoutMs;
+    const removed: string[] = [];
+    for (const [sessionId, session] of sessions) {
+      if (session.lastSeenAtMs <= cutoff) {
+        sessions.delete(sessionId);
+        removed.push(sessionId);
+      }
+    }
+    return removed;
+  };
 
   return {
     registerSession(session) {
       const summary = toSummary(session);
-      sessions.set(session.id, { ...session, summary, messages: messagesFromEntries(session.entries ?? []), tools: [], pendingMessageCount: 0, commands: [] });
+      sessions.set(session.id, {
+        ...session,
+        summary,
+        messages: messagesFromEntries(session.entries ?? []),
+        tools: [],
+        pendingMessageCount: 0,
+        commands: [],
+        lastSeenAtMs: now(),
+      });
       return summary;
     },
 
@@ -84,13 +117,30 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
       return sessions.delete(sessionId);
     },
 
+    getRegisteredSession(sessionId) {
+      pruneInactiveSessions();
+      return sessions.get(sessionId)?.summary;
+    },
+
+    touchSession(sessionId) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      session.lastSeenAtMs = now();
+      return true;
+    },
+
+    pruneInactiveSessions,
+
     listProjects() {
+      pruneInactiveSessions();
       const projects = new Map<string, ActiveProject>();
       for (const session of sessions.values()) projects.set(session.project.id, session.project);
       return [...projects.values()].sort((left, right) => left.name.localeCompare(right.name));
     },
 
     listProjectSessions(projectId) {
+      pruneInactiveSessions();
       return [...sessions.values()]
         .filter((session) => session.project.id === projectId)
         .map((session) => session.summary)
@@ -98,6 +148,7 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
     },
 
     getSessionState(sessionId, options) {
+      pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
       return {
@@ -110,12 +161,14 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
     },
 
     getSessionMessages(sessionId, beforeCursor, options) {
+      pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
       return olderTranscriptPage(session.messages, beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
     },
 
     enqueueCommand(sessionId, command) {
+      pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return false;
       session.commands.push(command);
@@ -123,6 +176,7 @@ export function createActiveSessionRegistry(): ActiveSessionRegistry {
     },
 
     takeCommands(sessionId) {
+      pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return [];
       const commands = session.commands;

@@ -82,7 +82,10 @@ export type StartServerOptions = {
   sessionService?: SessionService;
   activeSessions?: ActiveSessionRegistry;
   pairService?: PairService;
+  sessionSweepIntervalMs?: number;
 };
+
+const DEFAULT_SESSION_SWEEP_INTERVAL_MS = 1_000;
 
 type StreamHub = Map<string, Set<WebSocket>>;
 
@@ -97,6 +100,10 @@ export async function startDaemonServer(options: StartServerOptions): Promise<Da
   const webSockets = new WebSocketServer({ noServer: true });
   const servers = bindAddressesForConfig(options.config.bindAddress).map(() => createHttpServer(options, streamHub, webSockets));
   const bindAddresses = bindAddressesForConfig(options.config.bindAddress);
+  const sweepTimer = options.activeSessions
+    ? setInterval(() => closeSessions(options.activeSessions!.pruneInactiveSessions(), streamHub), options.sessionSweepIntervalMs ?? DEFAULT_SESSION_SWEEP_INTERVAL_MS)
+    : undefined;
+  sweepTimer?.unref?.();
 
   for (let index = 0; index < servers.length; index += 1) {
     const { host, port } = parseBindAddress(bindAddresses[index] ?? options.config.bindAddress);
@@ -107,6 +114,7 @@ export async function startDaemonServer(options: StartServerOptions): Promise<Da
   return {
     address: `${address.address}:${address.port}`,
     close: async () => {
+      if (sweepTimer) clearInterval(sweepTimer);
       webSockets.close();
       await Promise.all(servers.map((server) => closeServer(server)));
     },
@@ -169,6 +177,17 @@ async function handleHttpRequest(
   }
 
   const tuiSessionMatch = pathname.match(/^\/v1\/tui\/sessions\/([^/]+)$/);
+  if (request.method === "GET" && tuiSessionMatch) {
+    if (!(await isTuiAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    const sessionId = decodeURIComponent(tuiSessionMatch[1] ?? "");
+    const session = options.activeSessions?.getRegisteredSession(sessionId);
+    writeJson(response, session ? 200 : 404, session ? { session } : { error: "session_not_found" });
+    return;
+  }
+
   if (request.method === "DELETE" && tuiSessionMatch) {
     if (!(await isTuiAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -176,8 +195,7 @@ async function handleHttpRequest(
     }
     const sessionId = decodeURIComponent(tuiSessionMatch[1] ?? "");
     const unregistered = options.activeSessions?.unregisterSession(sessionId) ?? false;
-    streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "session_closed" }));
-    streamHub.delete(sessionId);
+    if (unregistered) closeSessions([sessionId], streamHub);
     writeJson(response, 200, { unregistered });
     return;
   }
@@ -189,6 +207,10 @@ async function handleHttpRequest(
       return;
     }
     const sessionId = decodeURIComponent(tuiCommandsMatch[1] ?? "");
+    if (options.activeSessions && !options.activeSessions.touchSession(sessionId)) {
+      writeJson(response, 404, { error: "session_not_found" });
+      return;
+    }
     writeJson(response, 200, { commands: options.activeSessions?.takeCommands(sessionId) ?? [] });
     return;
   }
@@ -200,6 +222,10 @@ async function handleHttpRequest(
       return;
     }
     const sessionId = decodeURIComponent(tuiEventMatch[1] ?? "");
+    if (options.activeSessions && !options.activeSessions.touchSession(sessionId)) {
+      writeJson(response, 404, { error: "session_not_found" });
+      return;
+    }
     const event = await readJsonBody(request);
     streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
     writeJson(response, 200, { accepted: true });
@@ -449,6 +475,13 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+function closeSessions(sessionIds: string[], streamHub: StreamHub): void {
+  for (const sessionId of sessionIds) {
+    streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "session_closed" }));
+    streamHub.delete(sessionId);
+  }
 }
 
 function sendWebSocketJson(webSocket: WebSocket, event: unknown): void {

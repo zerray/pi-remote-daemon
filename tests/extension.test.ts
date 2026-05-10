@@ -254,14 +254,41 @@ describe("remote control extension", () => {
     expect(statuses.at(-1)).toEqual({ key: "remote-control", text: undefined });
   });
 
-  it("clears status on session start", () => {
+  it("syncs remote-control status on resumed active sessions", async () => {
     const { pi, handlers } = createFakePi();
     const { ctx, statuses } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        if (init?.method === "POST") return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    handlers.get("session_start")?.({ type: "session_start", reason: "resume" }, ctx);
+
+    await vi.waitFor(() => expect(statuses.at(-1)).toEqual({ key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" }));
+    expect(fetchCalls).toEqual([
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1", init: { method: undefined, body: undefined } },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions",
+        init: { method: "POST", body: expect.objectContaining({ id: "sess_pi_1", piSessionId: "pi_1" }) },
+      },
+    ]);
+  });
+
+  it("clears status on session start when the daemon has no active registration", async () => {
+    const { pi, handlers } = createFakePi();
+    const { ctx, statuses } = createContext();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "session_not_found" }), { status: 404 })));
     remoteControlExtension(pi as never);
 
     handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
 
-    expect(statuses).toEqual([{ key: "remote-control", text: undefined }]);
+    await vi.waitFor(() => expect(statuses).toEqual([{ key: "remote-control", text: undefined }]));
   });
 
   it("toggles off an already registered TUI session", async () => {
