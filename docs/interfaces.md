@@ -133,11 +133,11 @@ Response:
 }
 ```
 
-`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp plus `id` as a tie-breaker. The cursor is encoded by the daemon and treated as opaque by clients.
+`messages` are ordered oldest-to-newest within the returned window. `olderMessagesCursor` is `null` when there are no older messages. When present, the cursor is generated from the oldest returned message's `createdAt` timestamp. The cursor is encoded by the daemon and treated as opaque by clients.
 
 `GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
 
-Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive upper bound of `(createdAt, id)`, so returned messages satisfy `createdAt < cursor.createdAt`, or `createdAt == cursor.createdAt && id < cursor.id` when multiple messages share the same timestamp. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the next older transcript page before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive timestamp upper bound, so returned messages satisfy `createdAt < cursor.createdAt`. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
