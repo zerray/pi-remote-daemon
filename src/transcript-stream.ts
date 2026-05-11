@@ -1,9 +1,19 @@
-import { asRecord, readString, transcriptMessageFromPiMessage } from "./transcript-message.js";
+import { asRecord, readString, readTimestamp, transcriptMessageFromPiMessage } from "./transcript-message.js";
 import type { TranscriptContentBlock, TranscriptStreamEvent } from "./types.js";
 
 export function normalizeTuiEvent(event: unknown): TranscriptStreamEvent[] {
   const record = asRecord(event);
   switch (record.type) {
+    case "turn_start": {
+      const turnIndex = readTurnIndex(record.turnIndex);
+      if (turnIndex === undefined) return [];
+      const createdAt = readTimestamp(record.timestamp);
+      return createdAt ? [{ type: "turn_start", turnIndex, createdAt }] : [{ type: "turn_start", turnIndex }];
+    }
+    case "turn_end": {
+      const turnIndex = readTurnIndex(record.turnIndex);
+      return turnIndex === undefined ? [] : [{ type: "turn_end", turnIndex }];
+    }
     case "message_start":
       return transcriptMessageFromPiMessage({ id: messageId(record), timestamp: record.timestamp, message: record.message, isStreaming: true })
         .map((message) => ({ type: "transcript_message_start", message }));
@@ -62,6 +72,10 @@ function messageId(record: Record<string, unknown>): string | undefined {
 }
 
 function readContentIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function readTurnIndex(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 

@@ -57,6 +57,8 @@ export type TranscriptMessagePatch =
 
 export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
+  | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
+  | { type: "turn_end"; turnIndex: number }
   | { type: "transcript_message_start"; message: TranscriptMessage }
   | { type: "transcript_message_patch"; messageId: string; contentIndex?: number; patch: TranscriptMessagePatch }
   | { type: "transcript_message_end"; message: TranscriptMessage }

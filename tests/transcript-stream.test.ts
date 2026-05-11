@@ -54,6 +54,15 @@ describe("TUI event transcript stream normalization", () => {
     })).toEqual([{ type: "transcript_message_patch", messageId: "msg_1", contentIndex: 2, patch: { type: "toolCall", toolCall: { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } } } }]);
   });
 
+  it("normalizes turn lifecycle events", () => {
+    expect(normalizeTuiEvent({ type: "turn_start", turnIndex: 2, timestamp: 1778284801000 })).toEqual([
+      { type: "turn_start", turnIndex: 2, createdAt: "2026-05-09T00:00:01.000Z" },
+    ]);
+    expect(normalizeTuiEvent({ type: "turn_end", turnIndex: 2, message: { role: "assistant", content: [] }, toolResults: [] })).toEqual([
+      { type: "turn_end", turnIndex: 2 },
+    ]);
+  });
+
   it("normalizes tool execution events", () => {
     expect(normalizeTuiEvent({ type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "ls" } })).toEqual([
       { type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "ls" } },

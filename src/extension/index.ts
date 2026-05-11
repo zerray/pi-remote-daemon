@@ -94,6 +94,8 @@ function registerEventForwarders(
 ): void {
   pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
   pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
+  pi.on("turn_start", forward);
+  pi.on("turn_end", forward);
   pi.on("message_start", forward);
   pi.on("message_update", forward);
   pi.on("message_end", forward);

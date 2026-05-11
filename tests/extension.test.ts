@@ -358,6 +358,36 @@ describe("remote control extension", () => {
     });
   });
 
+  it("forwards turn lifecycle events while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("turn_start")?.({ type: "turn_start", turnIndex: 0, timestamp: 1778284801000 }, ctx);
+    handlers.get("turn_end")?.({ type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] }, toolResults: [] }, ctx);
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(3));
+
+    expect(fetchCalls.slice(1)).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "turn_start", turnIndex: 0, timestamp: 1778284801000 } },
+      },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] }, toolResults: [] } },
+      },
+    ]);
+  });
+
   it("forwards TUI events while remote control is active", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
