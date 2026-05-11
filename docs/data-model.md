@@ -198,6 +198,8 @@ Transcript pages contain bounded message windows ordered oldest-to-newest by `cr
 ```ts
 type TranscriptStreamEvent =
   | { type: "session_state"; state: SessionSnapshot }
+  | { type: "turn_start"; turnIndex: number; createdAt?: string }
+  | { type: "turn_end"; turnIndex: number }
   | { type: "transcript_message_start"; message: TranscriptMessage }
   | { type: "transcript_message_patch"; messageId: string; contentIndex?: number; patch: TranscriptMessagePatch }
   | { type: "transcript_message_end"; message: TranscriptMessage }
@@ -214,7 +216,7 @@ type TranscriptMessagePatch =
   | { type: "replace"; message: TranscriptMessage };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events but do not expose raw Pi event payloads.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events.
 
 ## TUI control channel
 

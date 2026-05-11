@@ -42,7 +42,7 @@ The extension responsibilities are session-aware:
 - Start the daemon on demand when either command needs it.
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
 - When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after the TUI PID exits or heartbeats stop.
-- Forward Pi message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization.
+- Forward Pi turn, message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization.
 - Receive daemon-forwarded prompt and abort commands and apply them to the current live TUI runtime through Pi extension APIs.
 
 The extension owns live Pi session control. It does not expose a network listener to iOS.

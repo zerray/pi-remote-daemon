@@ -234,7 +234,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
 Initial state:
 
@@ -252,6 +252,15 @@ Initial state:
   }
 }
 ```
+
+Turn lifecycle events:
+
+```json
+{ "type": "turn_start", "turnIndex": 0, "createdAt": "2026-05-09T09:47:00.000Z" }
+{ "type": "turn_end", "turnIndex": 0 }
+```
+
+`turn_start` marks an active model/tool turn. `turn_end` marks that the turn is complete. Transcript content is still delivered through message and tool events.
 
 Message lifecycle events:
 
@@ -320,7 +329,7 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 While active, the extension forwards Pi extension events to the daemon over the package-internal control interface. These raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, and session lifecycle events emitted by the Pi extension API.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, and session lifecycle events emitted by the Pi extension API.
 
 ### Daemon-to-TUI commands
 
