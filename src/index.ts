@@ -11,5 +11,6 @@ export * from "./session-index.js";
 export * from "./session-transcript.js";
 export * from "./transcript-message.js";
 export * from "./transcript-pagination.js";
+export * from "./transcript-preview.js";
 export * from "./transcript-stream.js";
 export * from "./types.js";

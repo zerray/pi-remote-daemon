@@ -10,6 +10,7 @@ import {
   MAX_TRANSCRIPT_PAGE_LIMIT,
   type TranscriptPage,
 } from "../transcript-pagination.js";
+import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
 import type { DaemonConfig } from "../types.js";
 
@@ -404,8 +405,8 @@ async function handleUpgrade(
     streamHub.set(sessionId, subscribers);
     webSocket.once("close", () => subscribers.delete(webSocket));
 
-    const activeState = options.activeSessions?.getSessionState(sessionId, { messageLimit: DEFAULT_TRANSCRIPT_PAGE_LIMIT });
-    if (activeState) sendWebSocketJson(webSocket, { type: "session_state", state: activeState });
+    const activeState = options.activeSessions?.getSessionState(sessionId, { messageLimit: INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT });
+    if (activeState) sendWebSocketJson(webSocket, { type: "session_state", state: previewInitialSessionState(activeState) });
 
     void options.sessionService?.streamSession?.(sessionId, (event) => {
       sendWebSocketJson(webSocket, event);

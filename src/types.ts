@@ -32,16 +32,18 @@ export type PairingCode = {
 };
 
 export type TranscriptContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments: unknown }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: "text"; text: string; truncated?: boolean; originalBytes?: number }
+  | { type: "thinking"; thinking: string; truncated?: boolean; originalBytes?: number }
+  | { type: "toolCall"; id: string; name: string; arguments: unknown; argumentsTruncated?: boolean; argumentsOriginalBytes?: number }
+  | { type: "image"; data: string; mimeType: string; truncated?: boolean; originalBytes?: number };
 
 export type TranscriptMessage = {
   id: string;
   role: "user" | "assistant" | "toolResult" | "system";
   content: TranscriptContentBlock[];
   text: string;
+  textTruncated?: boolean;
+  textOriginalBytes?: number;
   createdAt: IsoTimestamp;
   toolCallId?: string;
   toolName?: string;

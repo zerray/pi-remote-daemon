@@ -163,6 +163,55 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("sends bounded preview session state to iOS WebSocket subscribers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-ws-preview-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, Array.from({ length: 25 }, (_, index) => JSON.stringify({
+        type: "message",
+        id: `msg_${index + 1}`,
+        timestamp: `2026-05-09T00:00:${String(index + 1).padStart(2, "0")}.000Z`,
+        message: { role: "assistant", content: [{ type: "text", text: index === 24 ? "z".repeat(11 * 1024) : `message ${index + 1}` }] },
+      })).join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 25,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:25.000Z",
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const wsUrl = baseUrl.replace("http://", "ws://");
+          const message = await new Promise<{ type: string; state: { messages: Array<{ id: string; text: string; textTruncated?: boolean; content: unknown[] }> } }>((resolve, reject) => {
+            const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+              headers: { authorization: "Bearer test-token" },
+            });
+            webSocket.once("message", (data) => {
+              resolve(JSON.parse(String(data)));
+              webSocket.close();
+            });
+            webSocket.once("error", reject);
+          });
+
+          expect(message.type).toBe("session_state");
+          expect(message.state.messages).toHaveLength(20);
+          expect(message.state.messages[0]?.id).toBe("msg_6");
+          expect(message.state.messages.at(-1)).toMatchObject({ id: "msg_25", textTruncated: true });
+          expect(message.state.messages.at(-1)?.text).toHaveLength(10 * 1024);
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("broadcasts normalized TUI session events to iOS WebSocket subscribers", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
