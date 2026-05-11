@@ -72,7 +72,7 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 
 The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
 
-Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. HTTP transcript reads and WebSocket live updates expose the same public `TranscriptMessage` shape. WebSocket streams are for normalized live updates and must not carry unbounded session history.
+Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. HTTP transcript reads and WebSocket live updates expose the same public `TranscriptMessage` shape. WebSocket streams are for normalized live updates and must not carry unbounded session history. The initial WebSocket `session_state` is further bounded to a small recent window with oversized transcript payloads truncated to previews.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 

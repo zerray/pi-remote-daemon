@@ -171,12 +171,14 @@ type TranscriptMessage = {
   id: string;
   role: "user" | "assistant" | "toolResult" | "system";
   content: Array<
-    | { type: "text"; text: string }
-    | { type: "thinking"; thinking: string }
-    | { type: "toolCall"; id: string; name: string; arguments: unknown }
-    | { type: "image"; data: string; mimeType: string }
+    | { type: "text"; text: string; truncated?: boolean; originalBytes?: number }
+    | { type: "thinking"; thinking: string; truncated?: boolean; originalBytes?: number }
+    | { type: "toolCall"; id: string; name: string; arguments: unknown; argumentsTruncated?: boolean; argumentsOriginalBytes?: number }
+    | { type: "image"; data: string; mimeType: string; truncated?: boolean; originalBytes?: number }
   >;
   text: string;
+  textTruncated?: boolean;
+  textOriginalBytes?: number;
   createdAt: string;
   toolCallId?: string;
   toolName?: string;
@@ -185,7 +187,7 @@ type TranscriptMessage = {
 };
 ```
 
-`content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available.
+`content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available. Truncation metadata is present only when the daemon intentionally sends a preview.
 
 `POST /v1/sessions/{sessionId}/prompt`
 
@@ -236,6 +238,8 @@ Response:
 
 Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
+The initial `session_state` contains at most 20 recent messages regardless of the HTTP transcript default. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
+
 Initial state:
 
 ```json
@@ -243,7 +247,20 @@ Initial state:
   "type": "session_state",
   "state": {
     "session": { "id": "sess_...", "isActive": true },
-    "messages": [],
+    "messages": [
+      {
+        "id": "msg_...",
+        "role": "toolResult",
+        "content": [{ "type": "text", "text": "first 10 KiB preview...", "truncated": true, "originalBytes": 1048576 }],
+        "text": "first 10 KiB preview...",
+        "textTruncated": true,
+        "textOriginalBytes": 1048576,
+        "createdAt": "2026-05-09T09:47:00.000Z",
+        "toolCallId": "call_...",
+        "toolName": "bash",
+        "isStreaming": false
+      }
+    ],
     "olderMessagesCursor": null,
     "hasOlderMessages": false,
     "tools": [],

@@ -165,6 +165,8 @@ type TranscriptMessage = {
   role: "user" | "assistant" | "toolResult" | "system";
   content: TranscriptContentBlock[];
   text: string;
+  textTruncated?: boolean;
+  textOriginalBytes?: number;
   createdAt: string;
   toolCallId?: string;
   toolName?: string;
@@ -173,13 +175,13 @@ type TranscriptMessage = {
 };
 
 type TranscriptContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | { type: "toolCall"; id: string; name: string; arguments: unknown }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: "text"; text: string; truncated?: boolean; originalBytes?: number }
+  | { type: "thinking"; thinking: string; truncated?: boolean; originalBytes?: number }
+  | { type: "toolCall"; id: string; name: string; arguments: unknown; argumentsTruncated?: boolean; argumentsOriginalBytes?: number }
+  | { type: "image"; data: string; mimeType: string; truncated?: boolean; originalBytes?: number };
 ```
 
-`TranscriptMessage` is the public transcript shape used by both HTTP transcript reads and WebSocket live updates. `content` preserves structured Pi message blocks. `text` is a display summary derived from text-like blocks and kept for clients that need a simple preview. Tool-result messages carry `toolCallId`, `toolName`, and `isError` when present.
+`TranscriptMessage` is the public transcript shape used by both HTTP transcript reads and WebSocket live updates. `content` preserves structured Pi message blocks. `text` is a display summary derived from text-like blocks and kept for clients that need a simple preview. Tool-result messages carry `toolCallId`, `toolName`, and `isError` when present. Truncation metadata is used when the daemon intentionally sends a preview instead of the full string payload.
 
 ## Transcript page
 
@@ -216,7 +218,7 @@ type TranscriptMessagePatch =
   | { type: "replace"; message: TranscriptMessage };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
 
 ## TUI control channel
 
