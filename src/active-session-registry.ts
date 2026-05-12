@@ -1,6 +1,6 @@
 import { readSessionTranscriptMessages } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
-import type { ToolCallStatus } from "./types.js";
+import type { RuntimeStatus, ToolCallStatus } from "./types.js";
 
 export type ActiveProject = {
   id: string;
@@ -18,6 +18,7 @@ export type ActiveSessionRegistration = {
   messageCount: number;
   isStreaming: boolean;
   updatedAt: string;
+  runtimeStatus?: RuntimeStatus;
   entries?: unknown[];
 };
 
@@ -41,6 +42,7 @@ export type ActiveSessionState = TranscriptPage & {
   tools: ToolCallStatus[];
   isStreaming: boolean;
   pendingMessageCount: number;
+  runtimeStatus: RuntimeStatus | null;
 };
 
 export type ActiveSessionRegistry = {
@@ -52,6 +54,7 @@ export type ActiveSessionRegistry = {
   listProjectSessions(projectId: string): ActiveSessionSummary[];
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
+  updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
   takeCommands(sessionId: string): RemoteTuiCommand[];
 };
@@ -148,6 +151,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
         tools: session.tools,
         isStreaming: session.isStreaming,
         pendingMessageCount: session.pendingMessageCount,
+        runtimeStatus: session.runtimeStatus ?? null,
       };
     },
 
@@ -156,6 +160,15 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       const session = sessions.get(sessionId);
       if (!session) return undefined;
       return olderTranscriptPage(readSessionTranscriptMessages(session.sessionFile), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
+    },
+
+    updateRuntimeStatus(sessionId, status) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      if (JSON.stringify(session.runtimeStatus ?? null) === JSON.stringify(status)) return false;
+      session.runtimeStatus = status;
+      return true;
     },
 
     enqueueCommand(sessionId, command) {

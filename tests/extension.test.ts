@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import remoteControlExtension, { enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
+import remoteControlExtension, { collectRuntimeStatus, enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
   name: string;
@@ -18,6 +18,8 @@ type ExtensionTestContext = {
     getSessionName(): string | undefined;
     getEntries(): unknown[];
   };
+  model?: unknown;
+  getContextUsage?(): unknown;
   isIdle(): boolean;
   ui: {
     theme: { fg(color: string, text: string): string };
@@ -64,6 +66,8 @@ function createContext() {
         getSessionName: () => "Fix bug",
         getEntries: () => [{}, {}],
       },
+      model: { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
+      getContextUsage: () => ({ tokens: 65000, contextWindow: 200000, percent: 32.5 }),
       isIdle: () => true,
       ui: {
         theme: { fg: (color: string, text: string) => (color === "success" ? `\u001b[32m${text}\u001b[39m` : text) },
@@ -90,6 +94,28 @@ afterEach(() => {
 });
 
 describe("remote control extension", () => {
+  it("collects runtime status from the live Pi context", () => {
+    const ctx = {
+      model: { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
+      getContextUsage: () => ({ tokens: 65000, contextWindow: 200000, percent: 32.5 }),
+      sessionManager: {
+        getEntries: () => [
+          { type: "message", message: { role: "user", content: "hello" } },
+          { type: "message", message: { role: "assistant" }, usage: { input: 12, output: 3, cacheRead: 50, cacheWrite: 10, cost: { input: 0.036, output: 0.045, cacheRead: 0.015, cacheWrite: 0.0375, total: 0.1335 } } },
+        ],
+      },
+    };
+    const pi = { getThinkingLevel: () => "medium" };
+
+    expect(collectRuntimeStatus(pi, ctx, () => new Date("2026-05-09T09:47:00.000Z"))).toEqual({
+      model: { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
+      thinkingLevel: "medium",
+      usage: { input: 12, output: 3, cacheRead: 50, cacheWrite: 10, cost: { input: 0.036, output: 0.045, cacheRead: 0.015, cacheWrite: 0.0375, total: 0.1335 } },
+      context: { tokens: 65000, contextWindow: 200000, percent: 32.5 },
+      updatedAt: "2026-05-09T09:47:00.000Z",
+    });
+  });
+
   it("registers remote-control commands", () => {
     const { pi, commands } = createFakePi();
 
@@ -143,7 +169,12 @@ describe("remote control extension", () => {
         url: "http://127.0.0.1:17373/v1/tui/sessions",
         init: {
           method: "POST",
-          body: expect.objectContaining({ id: "sess_pi_1", piSessionId: "pi_1", sessionFile: "/tmp/session.jsonl" }),
+          body: expect.objectContaining({
+            id: "sess_pi_1",
+            piSessionId: "pi_1",
+            sessionFile: "/tmp/session.jsonl",
+            runtimeStatus: expect.objectContaining({ model: expect.objectContaining({ id: "claude-sonnet-4-5" }), context: expect.objectContaining({ percent: 32.5 }) }),
+          }),
         },
       },
     ]);
@@ -450,6 +481,30 @@ describe("remote control extension", () => {
         init: { method: "POST", body: { type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [] }, toolResults: [] } },
       },
     ]);
+  });
+
+  it("forwards runtime status changes while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const entries = [{ type: "message", message: { role: "assistant" }, usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } } }];
+    const { ctx } = createContext();
+    ctx.sessionManager.getEntries = () => entries;
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    entries.push({ type: "message", message: { role: "assistant" }, usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.02 } } });
+    handlers.get("message_end")?.({ type: "message_end", message: { id: "msg_1", role: "assistant" } }, ctx);
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: expect.objectContaining({ method: "POST", body: expect.objectContaining({ type: "runtime_status", status: expect.objectContaining({ usage: expect.objectContaining({ input: 3, output: 3 }) }) }) }),
+    })));
   });
 
   it("forwards TUI events while remote control is active", async () => {

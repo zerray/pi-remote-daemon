@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig } from "../types.js";
+import type { DaemonConfig, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -32,6 +32,7 @@ export type RemoteSessionState = {
   tools: unknown[];
   isStreaming: boolean;
   pendingMessageCount: number;
+  runtimeStatus?: unknown;
 };
 
 export type PromptSessionRequest = {
@@ -218,6 +219,12 @@ async function handleHttpRequest(
       return;
     }
     const event = await readJsonBody(request);
+    if (isRuntimeStatusEvent(event)) {
+      const changed = options.activeSessions?.updateRuntimeStatus(sessionId, event.status) ?? false;
+      if (changed) streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "runtime_status", status: event.status }));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     const normalizedEvents = normalizeTuiEvent(event);
     streamHub.get(sessionId)?.forEach((webSocket) => normalizedEvents.forEach((normalizedEvent) => sendWebSocketJson(webSocket, normalizedEvent)));
     writeJson(response, 200, { accepted: true });
@@ -428,6 +435,10 @@ async function isAuthorized(request: IncomingMessage, options: StartServerOption
 
 function isLoopbackRemoteAddress(address: string | undefined): boolean {
   return Boolean(address && (address === "::1" || address === "127.0.0.1" || address.startsWith("127.") || address.startsWith("::ffff:127.")));
+}
+
+function isRuntimeStatusEvent(event: unknown): event is { type: "runtime_status"; status: RuntimeStatus } {
+  return Boolean(event && typeof event === "object" && (event as { type?: unknown }).type === "runtime_status" && (event as { status?: unknown }).status && typeof (event as { status?: unknown }).status === "object");
 }
 
 function nextRequestId(): string {

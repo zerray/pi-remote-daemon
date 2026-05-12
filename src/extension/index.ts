@@ -5,17 +5,26 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import type { RemoteTuiCommand } from "../active-session-registry.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
+import { collectRuntimeStatus } from "../runtime-status.js";
 import { projectIdForPath } from "../session-index.js";
+
+export { collectRuntimeStatus } from "../runtime-status.js";
 
 export default function remoteControlExtension(pi: ExtensionAPI): void {
   const activeSessionIds = new Set<string>();
   const pollTimers = new Map<string, NodeJS.Timeout>();
+  const runtimeStatusCache = new Map<string, string>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
-    if (activeSessionIds.has(sessionId)) void postTuiEvent(sessionId, enrichTuiEventForDaemon(event, ctx));
+    if (activeSessionIds.has(sessionId)) {
+      void postTuiEvent(sessionId, enrichTuiEventForDaemon(event, ctx));
+      void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
+    }
   };
   const resetLocalState = (ctx: ExtensionContext) => {
-    deactivateLocalSession(ctx, daemonSessionId(ctx), activeSessionIds, pollTimers);
+    const sessionId = daemonSessionId(ctx);
+    runtimeStatusCache.delete(sessionId);
+    deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
   const cleanup = async (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
@@ -42,6 +51,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`Remote control disable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
           return;
         }
+        runtimeStatusCache.delete(sessionId);
         deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
         ctx.ui.notify("Remote control disabled for this session", "info");
         return;
@@ -52,7 +62,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
           method: "POST",
           headers: await tuiHeaders(),
-          body: JSON.stringify(toRegistration(ctx)),
+          body: JSON.stringify(toRegistration(pi, ctx)),
         });
       } catch (error) {
         ctx.ui.notify(`Remote control enable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -62,7 +72,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(`Remote control enable failed: HTTP ${response.status}`, "error");
         return;
       }
-      activateLocalSession(pi, ctx, sessionId, activeSessionIds, pollTimers);
+      runtimeStatusCache.set(sessionId, comparableRuntimeStatus(collectRuntimeStatus(pi, ctx)));
+      activateLocalSession(pi, ctx, sessionId, activeSessionIds, pollTimers, runtimeStatusCache);
       ctx.ui.notify("Remote control enabled for this session", "info");
     },
   });
@@ -162,11 +173,12 @@ function activateLocalSession(
   sessionId: string,
   activeSessionIds: Set<string>,
   pollTimers: Map<string, NodeJS.Timeout>,
+  runtimeStatusCache: Map<string, string>,
 ): void {
   activeSessionIds.add(sessionId);
   setRemoteControlStatus(ctx);
   if (pollTimers.has(sessionId)) return;
-  const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId, activeSessionIds, pollTimers).catch(() => undefined), 1000);
+  const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId, activeSessionIds, pollTimers, runtimeStatusCache).catch(() => undefined), 1000);
   timer.unref?.();
   pollTimers.set(sessionId, timer);
 }
@@ -210,7 +222,7 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function toRegistration(ctx: ExtensionCommandContext): unknown {
+function toRegistration(pi: unknown, ctx: ExtensionCommandContext): unknown {
   const cwd = ctx.cwd;
   const piSessionId = ctx.sessionManager.getSessionId();
   const sessionFile = ctx.sessionManager.getSessionFile() ?? "";
@@ -224,6 +236,7 @@ function toRegistration(ctx: ExtensionCommandContext): unknown {
     messageCount: ctx.sessionManager.getEntries().length,
     entries: ctx.sessionManager.getEntries(),
     isStreaming: !ctx.isIdle(),
+    runtimeStatus: collectRuntimeStatus(pi, ctx),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -238,12 +251,13 @@ async function pollRemoteCommands(
   sessionId: string,
   activeSessionIds: Set<string>,
   pollTimers: Map<string, NodeJS.Timeout>,
+  runtimeStatusCache: Map<string, string>,
 ): Promise<void> {
   const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`, {
     headers: await tuiHeaders(false),
   });
   if (response.status === 404) {
-    await reRegisterTuiSessionAfterHeartbeatMiss(ctx, sessionId, activeSessionIds, pollTimers);
+    await reRegisterTuiSessionAfterHeartbeatMiss(pi, ctx, sessionId, activeSessionIds, pollTimers, runtimeStatusCache);
     return;
   }
   if (!response.ok) return;
@@ -252,10 +266,12 @@ async function pollRemoteCommands(
 }
 
 async function reRegisterTuiSessionAfterHeartbeatMiss(
+  pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
   pollTimers: Map<string, NodeJS.Timeout>,
+  runtimeStatusCache: Map<string, string>,
 ): Promise<void> {
   if (!activeSessionIds.has(sessionId)) return;
 
@@ -264,14 +280,17 @@ async function reRegisterTuiSessionAfterHeartbeatMiss(
     response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
       method: "POST",
       headers: await tuiHeaders(),
-      body: JSON.stringify(toRegistration(ctx)),
+      body: JSON.stringify(toRegistration(pi, ctx)),
     });
   } catch {
     disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
     return;
   }
 
-  if (response.ok) return;
+  if (response.ok) {
+    runtimeStatusCache.set(sessionId, comparableRuntimeStatus(collectRuntimeStatus(pi, ctx)));
+    return;
+  }
   disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
 }
 
@@ -300,6 +319,19 @@ async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
     headers: await tuiHeaders(),
     body: JSON.stringify(event),
   });
+}
+
+async function postRuntimeStatusIfChanged(pi: unknown, ctx: ExtensionContext, sessionId: string, runtimeStatusCache: Map<string, string>): Promise<void> {
+  const status = collectRuntimeStatus(pi, ctx);
+  const comparable = comparableRuntimeStatus(status);
+  if (runtimeStatusCache.get(sessionId) === comparable) return;
+  runtimeStatusCache.set(sessionId, comparable);
+  await postTuiEvent(sessionId, { type: "runtime_status", status });
+}
+
+function comparableRuntimeStatus(status: ReturnType<typeof collectRuntimeStatus>): string {
+  const { updatedAt: _updatedAt, ...rest } = status;
+  return JSON.stringify(rest);
 }
 
 async function daemonBaseUrl(): Promise<string> {

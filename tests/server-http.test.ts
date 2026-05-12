@@ -7,6 +7,14 @@ import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 import { openDaemonStore } from "../src/persistence/daemon-store.js";
 import { bindAddressesForConfig, startDaemonServer, type StartServerOptions } from "../src/server/http.js";
 
+const runtimeStatus = {
+  model: { provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 200000 },
+  thinkingLevel: "medium" as const,
+  usage: { input: 12, output: 3, cacheRead: 50, cacheWrite: 10, cost: { input: 0.036, output: 0.045, cacheRead: 0.015, cacheWrite: 0.0375, total: 0.1335 } },
+  context: { tokens: 65000, contextWindow: 200000, percent: 32.5 },
+  updatedAt: "2026-05-09T09:47:00.000Z",
+};
+
 async function withServer<T>(
   fn: (baseUrl: string) => Promise<T>,
   overrides: Partial<StartServerOptions> = {},
@@ -210,6 +218,49 @@ describe("daemon HTTP server", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("stores and broadcasts runtime status events from active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.objectContaining({ runtimeStatus: null }) })));
+
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "runtime_status", status: runtimeStatus }),
+        });
+        expect(response.status).toBe(200);
+        await vi.waitFor(() => expect(messages).toContainEqual({ type: "runtime_status", status: runtimeStatus }));
+
+        const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        expect(snapshotResponse.status).toBe(200);
+        await expect(snapshotResponse.json()).resolves.toMatchObject({ runtimeStatus });
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
   });
 
   it("broadcasts normalized TUI session events to iOS WebSocket subscribers", async () => {

@@ -57,8 +57,40 @@ export type TranscriptMessagePatch =
   | { type: "toolCall"; toolCall: Extract<TranscriptContentBlock, { type: "toolCall" }> }
   | { type: "replace"; message: TranscriptMessage };
 
+export type RuntimeStatus = {
+  model: null | {
+    provider: string;
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+  };
+  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      total: number;
+    };
+  };
+  context: null | {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  };
+  updatedAt: IsoTimestamp;
+};
+
 export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
+  | { type: "runtime_status"; status: RuntimeStatus }
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
   | { type: "turn_end"; turnIndex: number }
   | { type: "transcript_message_start"; message: TranscriptMessage }

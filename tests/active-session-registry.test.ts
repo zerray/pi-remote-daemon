@@ -4,6 +4,14 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 
+const runtimeStatus = {
+  model: { provider: "anthropic", id: "claude-sonnet-4-5", contextWindow: 200000 },
+  thinkingLevel: "medium" as const,
+  usage: { input: 12, output: 3, cacheRead: 50, cacheWrite: 10, cost: { input: 0.036, output: 0.045, cacheRead: 0.015, cacheWrite: 0.0375, total: 0.1335 } },
+  context: { tokens: 65000, contextWindow: 200000, percent: 32.5 },
+  updatedAt: "2026-05-09T09:47:00.000Z",
+};
+
 describe("active TUI session registry", () => {
   it("groups active sessions by project and removes inactive sessions", () => {
     const registry = createActiveSessionRegistry();
@@ -129,10 +137,34 @@ describe("active TUI session registry", () => {
       tools: [],
       isStreaming: true,
       pendingMessageCount: 0,
+      runtimeStatus: null,
       });
       expect(registry.getSessionState("missing")).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("stores and updates runtime status snapshots for active sessions", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      runtimeStatus,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.getSessionState("sess_1")?.runtimeStatus).toEqual(runtimeStatus);
+    expect(registry.updateRuntimeStatus("sess_1", runtimeStatus)).toBe(false);
+
+    const nextStatus = { ...runtimeStatus, thinkingLevel: "high" as const, updatedAt: "2026-05-09T09:48:00.000Z" };
+    expect(registry.updateRuntimeStatus("sess_1", nextStatus)).toBe(true);
+    expect(registry.getSessionState("sess_1")?.runtimeStatus).toEqual(nextStatus);
+    expect(registry.updateRuntimeStatus("missing", nextStatus)).toBe(false);
   });
 });
