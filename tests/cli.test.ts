@@ -320,12 +320,12 @@ describe("daemon CLI", () => {
     });
 
     expect(code).toBe(0);
-    expect(lines.at(-1)).toBe(
-      "Pairing link: pi-remote://pair?baseUrl=https%3A%2F%2Fmacbook.tailnet.ts.net%3A17373&code=123456&expiresAt=2026-05-09T00%3A01%3A00.000Z",
-    );
+    expect(lines[0]).toBe("Scan with Pi iOS app:");
+    expect(lines[1]).toContain("█");
+    expect(lines.at(-1)).toBe("Expires at: 2026-05-09T00:01:00.000Z");
   });
 
-  it("creates and prints a local TUI pairing link", async () => {
+  it("creates and prints local TUI pairing QR and expiry", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
     const code = await main(["pair", "--state-dir", "/tmp/state"], {
@@ -347,10 +347,6 @@ describe("daemon CLI", () => {
     expect(calls).toEqual([{ ensureStateDir: "/tmp/state" }, { openStore: "/tmp/state" }, { closeStore: true }]);
     expect(lines[0]).toBe("Scan with Pi iOS app:");
     expect(lines[1]).toContain("█");
-    expect(lines.slice(2)).toEqual([
-      "Pair code: 123456",
-      "Expires at: 2026-05-09T00:01:00.000Z",
-      "Pairing link: pi-remote://pair?baseUrl=https%3A%2F%2Fmacbook.tailnet.ts.net%3A17373&code=123456&expiresAt=2026-05-09T00%3A01%3A00.000Z",
-    ]);
+    expect(lines.slice(2)).toEqual(["Expires at: 2026-05-09T00:01:00.000Z"]);
   });
 });

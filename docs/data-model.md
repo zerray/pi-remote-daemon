@@ -79,7 +79,7 @@ type PairingCode = {
 };
 ```
 
-Pairing codes are short-lived. The daemon stores code hashes, not raw codes. Raw pair codes are created only for `/remote-control-pair` and are displayed in the Pi TUI.
+Pairing codes are short-lived. The daemon stores code hashes, not raw codes. Raw pair codes are created only for `/remote-control-pair` and are encoded into the Pi TUI QR code.
 
 ## Pairing link
 
@@ -93,7 +93,7 @@ type PairingLink = {
 };
 ```
 
-The raw link is encoded as a `pi-remote://pair?...` URL and rendered as a QR code by `/remote-control-pair`. The same values are displayed as text fallback.
+The raw link is encoded as a `pi-remote://pair?...` URL and rendered as a QR code by `/remote-control-pair`. The raw link is not printed as a separate TUI text line.
 
 ## Paired device
 

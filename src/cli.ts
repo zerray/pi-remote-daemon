@@ -106,7 +106,7 @@ async function pairCommand(args: string[], deps: CliDependencies, env: NodeJS.Pr
       pairCode: result.pairCode,
       expiresAt: result.expiresAt,
     });
-    for (const line of formatPairingDisplay({ pairCode: result.pairCode, expiresAt: result.expiresAt, pairingLink })) {
+    for (const line of formatPairingDisplay({ expiresAt: result.expiresAt, pairingLink })) {
       writeLine(line);
     }
     return 0;
