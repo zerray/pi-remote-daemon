@@ -99,10 +99,13 @@ describe("remote control extension", () => {
       model: { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
       getContextUsage: () => ({ tokens: 65000, contextWindow: 200000, percent: 32.5 }),
       sessionManager: {
-        getEntries: () => [
+        entries: [
           { type: "message", message: { role: "user", content: "hello" } },
           { type: "message", message: { role: "assistant" }, usage: { input: 12, output: 3, cacheRead: 50, cacheWrite: 10, cost: { input: 0.036, output: 0.045, cacheRead: 0.015, cacheWrite: 0.0375, total: 0.1335 } } },
         ],
+        getEntries() {
+          return this.entries;
+        },
       },
     };
     const pi = { getThinkingLevel: () => "medium" };

@@ -10,7 +10,7 @@ export function collectRuntimeStatus(pi: unknown, ctx: unknown, now: () => Date 
     model: collectModel(context.model),
     thinkingLevel: collectThinkingLevel(pi),
     usage: collectUsage(readSessionEntries(context)),
-    context: collectContextUsage(callNoArgs(context.getContextUsage)),
+    context: collectContextUsage(callMethod(context, "getContextUsage")),
     updatedAt: now().toISOString(),
   };
 }
@@ -31,7 +31,7 @@ function collectModel(value: unknown): RuntimeStatus["model"] {
 }
 
 function collectThinkingLevel(pi: unknown): RuntimeStatus["thinkingLevel"] {
-  const level = callNoArgs(asRecord(pi).getThinkingLevel);
+  const level = callMethod(asRecord(pi), "getThinkingLevel");
   return typeof level === "string" && THINKING_LEVELS.has(level) ? level as RuntimeStatus["thinkingLevel"] : null;
 }
 
@@ -81,14 +81,15 @@ function collectUsage(entries: unknown[]): RuntimeStatusUsage {
 
 function readSessionEntries(context: Record<string, unknown>): unknown[] {
   const sessionManager = asRecord(context.sessionManager);
-  const entries = callNoArgs(sessionManager.getEntries);
+  const entries = callMethod(sessionManager, "getEntries");
   return Array.isArray(entries) ? entries : [];
 }
 
-function callNoArgs(value: unknown): unknown {
+function callMethod(record: Record<string, unknown>, key: string): unknown {
+  const value = record[key];
   if (typeof value !== "function") return undefined;
   try {
-    return (value as () => unknown)();
+    return (value as () => unknown).call(record);
   } catch {
     return undefined;
   }
