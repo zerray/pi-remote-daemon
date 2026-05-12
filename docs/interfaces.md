@@ -340,7 +340,7 @@ When `/remote-control` enables a session, the extension registers the current TU
 }
 ```
 
-`GET /v1/tui/sessions/{sessionId}/commands` also acts as the TUI heartbeat while remote control is active. The daemon removes active-session registrations when the owning TUI PID exits or when heartbeats stop, then broadcasts `session_closed` to iOS subscribers. Entering or resuming a TUI session does not automatically enable remote control; the user must run `/remote-control` each time.
+`GET /v1/tui/sessions/{sessionId}/commands` also acts as the TUI heartbeat while remote control is active. The daemon removes active-session registrations when the owning TUI PID exits or when heartbeats stop, then broadcasts `session_closed` to iOS subscribers. If this heartbeat returns `404 { "error": "session_not_found" }` while the TUI extension still has local remote-control state active, the extension re-registers the current session by posting the same registration payload to `/v1/tui/sessions`. If re-registration fails, the extension clears local active state and notifies the user. Entering or resuming a TUI session does not automatically enable remote control; the user must run `/remote-control` each time.
 
 ### TUI-to-daemon events
 

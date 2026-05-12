@@ -139,7 +139,7 @@ type ActiveTuiSession = {
 };
 ```
 
-An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads.
 
 ## Session snapshot
 
