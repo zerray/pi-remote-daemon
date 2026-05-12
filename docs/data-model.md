@@ -134,18 +134,18 @@ type ActiveTuiSession = {
   pid: number;
   messageCount: number;
   isStreaming: boolean;
-  status?: SessionStatus;
+  runtimeStatus?: RuntimeStatus;
   registeredAt: string;
   lastSeenAt: string;
 };
 ```
 
-An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `status` is the latest structured session-status snapshot reported by the owning TUI extension.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `runtimeStatus` is the latest structured runtime-status snapshot reported by the owning TUI extension.
 
-## Session status
+## Runtime status
 
 ```ts
-type SessionStatus = {
+type RuntimeStatus = {
   model: null | {
     provider: string;
     id: string;
@@ -177,7 +177,7 @@ type SessionStatus = {
 };
 ```
 
-`SessionStatus` is computed by the live TUI extension from Pi extension context. It is process state in the daemon, not durable storage. `context.tokens` and `context.percent` may be `null` when Pi reports current context usage as unknown.
+`RuntimeStatus` is computed by the live TUI extension from Pi extension context. It is process state in the daemon, not durable storage. `context.tokens` and `context.percent` may be `null` when Pi reports current context usage as unknown.
 
 ## Session snapshot
 
@@ -190,11 +190,11 @@ type SessionSnapshot = {
   tools: ToolCallStatus[];
   isStreaming: boolean;
   pendingMessageCount: number;
-  status: SessionStatus | null;
+  runtimeStatus: RuntimeStatus | null;
 };
 ```
 
-The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time and normalized into `TranscriptMessage` values. The snapshot includes the latest TUI-reported `SessionStatus` when available. Older transcript history is loaded through explicit transcript page requests.
+The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time and normalized into `TranscriptMessage` values. The snapshot includes the latest TUI-reported `RuntimeStatus` when available. Older transcript history is loaded through explicit transcript page requests.
 
 ## Transcript message
 
@@ -247,7 +247,7 @@ type TranscriptStreamEvent =
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; partialResult: unknown }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result?: unknown; isError: boolean }
-  | { type: "session_status"; status: SessionStatus }
+  | { type: "runtime_status"; status: RuntimeStatus }
   | { type: "session_closed" }
   | { type: "error"; error: string };
 
@@ -258,7 +258,7 @@ type TranscriptMessagePatch =
   | { type: "replace"; message: TranscriptMessage };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `session_status` replaces the previous status snapshot for the session. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed runtime-status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
 
 ## TUI control channel
 
@@ -268,7 +268,7 @@ type TuiControlChannel = {
   pid: number;
   status: "active" | "closing";
   lastHeartbeatAt: string;
-  latestSessionStatus?: SessionStatus;
+  latestRuntimeStatus?: RuntimeStatus;
 };
 ```
 

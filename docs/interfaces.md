@@ -128,7 +128,7 @@ Response:
   "tools": [],
   "isStreaming": false,
   "pendingMessageCount": 0,
-  "status": {
+  "runtimeStatus": {
     "model": {
       "provider": "anthropic",
       "id": "claude-sonnet-4-5",
@@ -203,10 +203,10 @@ type TranscriptMessage = {
 
 `content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available. Truncation metadata is present only when the daemon intentionally sends a preview.
 
-Session status snapshots use this shape and may be `null` when the TUI extension has not reported one yet:
+Runtime status snapshots use this shape and may be `null` when the TUI extension has not reported one yet:
 
 ```ts
-type SessionStatus = {
+type RuntimeStatus = {
   model: null | {
     provider: string;
     id: string;
@@ -305,7 +305,7 @@ If the session has no active TUI owner, the daemon returns `409`:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_status`, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
 The initial `session_state` contains at most 20 recent messages regardless of the HTTP transcript default. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
 
@@ -335,7 +335,7 @@ Initial state:
     "tools": [],
     "isStreaming": false,
     "pendingMessageCount": 0,
-    "status": null
+    "runtimeStatus": null
   }
 }
 ```
@@ -367,13 +367,13 @@ Tool execution events:
 { "type": "tool_execution_end", "toolCallId": "call_...", "toolName": "bash", "result": { "content": [{ "type": "text", "text": "final output" }] }, "isError": false }
 ```
 
-Session status events:
+Runtime status events:
 
 ```json
-{ "type": "session_status", "status": { "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "contextWindow": 200000 }, "thinkingLevel": "medium", "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } }, "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 }, "updatedAt": "2026-05-09T09:47:00.000Z" } }
+{ "type": "runtime_status", "status": { "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "contextWindow": 200000 }, "thinkingLevel": "medium", "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } }, "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 }, "updatedAt": "2026-05-09T09:47:00.000Z" } }
 ```
 
-The daemon sends `session_status` when the owning TUI extension reports a changed status snapshot. Clients should treat the event as replacing the previous status for that session.
+The daemon sends `runtime_status` when the owning TUI extension reports a changed runtime-status snapshot. Clients should treat the event as replacing the previous runtime status for that session.
 
 ## Pi TUI extension ↔ daemon
 
@@ -414,7 +414,7 @@ When `/remote-control` enables a session, the extension registers the current TU
     "pid": 12345,
     "messageCount": 42,
     "isStreaming": false,
-    "status": {
+    "runtimeStatus": {
       "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "contextWindow": 200000 },
       "thinkingLevel": "medium",
       "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } },
@@ -429,9 +429,9 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 ### TUI-to-daemon events
 
-While active, the extension forwards Pi extension events and session-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
+While active, the extension forwards Pi extension events and runtime-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Status snapshots are posted as `{ "type": "session_status", "status": SessionStatus }`; the daemon stores the snapshot and broadcasts the public `session_status` WebSocket event when it changes.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes.
 
 ### Daemon-to-TUI commands
 
