@@ -43,8 +43,9 @@ The extension responsibilities are session-aware:
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
 - When a locally active session heartbeat finds that the daemon no longer has the registration, re-register the current TUI session; if re-registration fails, clear local active state and notify the user.
 - When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after the TUI PID exits or heartbeats stop.
-- Forward Pi turn, message, assistant streaming, tool execution, queue, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization.
-- Receive daemon-forwarded prompt and abort commands and apply them to the current live TUI runtime through Pi extension APIs.
+- Forward Pi turn, message, assistant streaming, tool execution, queue, status, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization.
+- Compute structured session-status snapshots from the live TUI context and send them to the daemon when status inputs change.
+- Receive daemon-forwarded prompt, abort, and compact commands and apply them to the current live TUI runtime through Pi extension APIs.
 
 The extension owns live Pi session control. It does not expose a network listener to iOS.
 
@@ -56,7 +57,8 @@ The daemon responsibilities are independent of Pi SDK session ownership:
 - Enforce device token authentication for iOS requests and non-loopback TUI control requests.
 - Persist pairing codes, paired device token hashes, and daemon metadata.
 - Track currently activated TUI sessions and group them into projects for iOS display.
-- Relay prompt and abort requests from iOS to the TUI extension that owns the target session.
+- Relay prompt, abort, and compact requests from iOS to the TUI extension that owns the target session.
+- Store the latest TUI-reported session-status snapshot for each active session and include it in session state sent to iOS.
 - Serve bounded recent transcript snapshots and older transcript pages for active sessions by reading Pi session JSONL files and normalizing entries into public `TranscriptMessage` values.
 - Normalize live TUI Pi events into public transcript stream events for subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
 - Broadcast session updates to subscribed iOS WebSocket clients.
@@ -65,7 +67,7 @@ The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abor
 
 ## Session runtime model
 
-A live session controller is represented by a TUI extension control channel, not a daemon-created Pi runtime. The control channel is the authority for one remote-control-enabled TUI session. If the channel closes, the owning TUI PID exits, or heartbeats stop, the daemon marks the session inactive, removes it from project/session listings, and notifies iOS subscribers. If the same TUI process still has local remote control active and later observes the missing registration through heartbeat polling, it re-registers the session.
+A live session controller is represented by a TUI extension control channel, not a daemon-created Pi runtime. The control channel is the authority for one remote-control-enabled TUI session. It also provides session-status snapshots for model, usage, cost, and context information. If the channel closes, the owning TUI PID exits, or heartbeats stop, the daemon marks the session inactive, removes it from project/session listings, and notifies iOS subscribers. If the same TUI process still has local remote control active and later observes the missing registration through heartbeat polling, it re-registers the session.
 
 Multiple TUI processes may enable remote control at the same time. Each active session has one owning TUI control channel. The daemon rejects prompt or abort requests for sessions without an active owner.
 
@@ -73,7 +75,7 @@ Multiple TUI processes may enable remote control at the same time. Each active s
 
 The daemon binds the configured remote-facing address and, for specific non-loopback bind addresses, an additional `127.0.0.1` listener on the same port for local TUI control. The extension uses the loopback listener by default; iOS uses the configured advertised URL.
 
-Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. HTTP transcript reads and WebSocket live updates expose the same public `TranscriptMessage` shape. WebSocket streams are for normalized live updates and must not carry unbounded session history. The initial WebSocket `session_state` is further bounded to a small recent window with oversized transcript payloads truncated to previews.
+Session detail reads are bounded and derive transcript history from the active session's Pi JSONL session file: the daemon returns a recent transcript window first, then serves older transcript pages on request. Session detail reads and initial WebSocket state also include the latest TUI-reported `SessionStatus` snapshot when available. HTTP transcript reads and WebSocket live updates expose the same public `TranscriptMessage` shape. WebSocket streams are for normalized live updates and status updates; they must not carry unbounded session history. The initial WebSocket `session_state` is further bounded to a small recent window with oversized transcript payloads truncated to previews.
 
 The daemon stores its own durable state in a daemon state directory, defaulting to `~/.pi/remote-control` and overridable with `PI_REMOTE_CONTROL_DIR`.
 

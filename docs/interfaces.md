@@ -127,7 +127,27 @@ Response:
   "hasOlderMessages": true,
   "tools": [],
   "isStreaming": false,
-  "pendingMessageCount": 0
+  "pendingMessageCount": 0,
+  "status": {
+    "model": {
+      "provider": "anthropic",
+      "id": "claude-sonnet-4-5",
+      "name": "Claude Sonnet 4.5",
+      "contextWindow": 200000,
+      "maxTokens": 8192,
+      "reasoning": true
+    },
+    "thinkingLevel": "medium",
+    "usage": {
+      "input": 12000,
+      "output": 3000,
+      "cacheRead": 50000,
+      "cacheWrite": 10000,
+      "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 }
+    },
+    "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 },
+    "updatedAt": "2026-05-09T09:47:00.000Z"
+  }
 }
 ```
 
@@ -183,6 +203,41 @@ type TranscriptMessage = {
 
 `content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available. Truncation metadata is present only when the daemon intentionally sends a preview.
 
+Session status snapshots use this shape and may be `null` when the TUI extension has not reported one yet:
+
+```ts
+type SessionStatus = {
+  model: null | {
+    provider: string;
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+  };
+  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      total: number;
+    };
+  };
+  context: null | {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  };
+  updatedAt: string;
+};
+```
+
 `POST /v1/sessions/{sessionId}/prompt`
 
 Forwards a prompt to the TUI extension that owns the active session.
@@ -226,11 +281,31 @@ Response:
 }
 ```
 
+`POST /v1/sessions/{sessionId}/compact`
+
+Forwards a compact request to the TUI extension that owns the active session. This is the remote-control equivalent of running `/compact` in the Pi TUI. It is an explicit allowlisted action, not generic slash-command passthrough.
+
+Response:
+
+```json
+{
+  "accepted": true
+}
+```
+
+If the session has no active TUI owner, the daemon returns `409`:
+
+```json
+{
+  "error": "session_not_active"
+}
+```
+
 ### Session stream
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `session_status`, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
 The initial `session_state` contains at most 20 recent messages regardless of the HTTP transcript default. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
 
@@ -259,7 +334,8 @@ Initial state:
     "hasOlderMessages": false,
     "tools": [],
     "isStreaming": false,
-    "pendingMessageCount": 0
+    "pendingMessageCount": 0,
+    "status": null
   }
 }
 ```
@@ -290,6 +366,14 @@ Tool execution events:
 { "type": "tool_execution_update", "toolCallId": "call_...", "toolName": "bash", "partialResult": { "content": [{ "type": "text", "text": "partial output" }] } }
 { "type": "tool_execution_end", "toolCallId": "call_...", "toolName": "bash", "result": { "content": [{ "type": "text", "text": "final output" }] }, "isError": false }
 ```
+
+Session status events:
+
+```json
+{ "type": "session_status", "status": { "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "contextWindow": 200000 }, "thinkingLevel": "medium", "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } }, "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 }, "updatedAt": "2026-05-09T09:47:00.000Z" } }
+```
+
+The daemon sends `session_status` when the owning TUI extension reports a changed status snapshot. Clients should treat the event as replacing the previous status for that session.
 
 ## Pi TUI extension ↔ daemon
 
@@ -329,7 +413,14 @@ When `/remote-control` enables a session, the extension registers the current TU
     },
     "pid": 12345,
     "messageCount": 42,
-    "isStreaming": false
+    "isStreaming": false,
+    "status": {
+      "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "contextWindow": 200000 },
+      "thinkingLevel": "medium",
+      "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } },
+      "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 },
+      "updatedAt": "2026-05-09T09:47:00.000Z"
+    }
   }
 }
 ```
@@ -338,9 +429,9 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 ### TUI-to-daemon events
 
-While active, the extension forwards Pi extension events to the daemon over the package-internal control interface. These raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
+While active, the extension forwards Pi extension events and session-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, and session lifecycle events emitted by the Pi extension API.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Status snapshots are posted as `{ "type": "session_status", "status": SessionStatus }`; the daemon stores the snapshot and broadcasts the public `session_status` WebSocket event when it changes.
 
 ### Daemon-to-TUI commands
 
@@ -349,6 +440,7 @@ The daemon forwards iOS requests to the owning TUI extension:
 ```json
 { "type": "remote_prompt", "requestId": "req_...", "text": "...", "streamingBehavior": null }
 { "type": "remote_abort", "requestId": "req_..." }
+{ "type": "remote_compact", "requestId": "req_..." }
 ```
 
 Command acknowledgements are not part of the current MVP protocol.
@@ -364,4 +456,5 @@ The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is
 | List remote sessions | Daemon active TUI session registry. |
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
-| Stream events | Raw Pi event → TUI extension → daemon normalization → iOS WebSocket normalized transcript event. |
+| Compact | iOS → daemon → owning TUI extension → Pi extension API `ctx.compact()`. |
+| Stream events | Raw Pi event/status snapshot → TUI extension → daemon normalization/storage → iOS WebSocket normalized transcript or status event. |
