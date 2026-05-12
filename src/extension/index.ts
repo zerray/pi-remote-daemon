@@ -166,7 +166,7 @@ function activateLocalSession(
   activeSessionIds.add(sessionId);
   setRemoteControlStatus(ctx);
   if (pollTimers.has(sessionId)) return;
-  const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId).catch(() => undefined), 1000);
+  const timer = setInterval(() => void pollRemoteCommands(pi, ctx, sessionId, activeSessionIds, pollTimers).catch(() => undefined), 1000);
   timer.unref?.();
   pollTimers.set(sessionId, timer);
 }
@@ -232,13 +232,58 @@ function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string 
   return `sess_${ctx.sessionManager.getSessionId()}`;
 }
 
-async function pollRemoteCommands(pi: ExtensionAPI, ctx: ExtensionCommandContext, sessionId: string): Promise<void> {
+async function pollRemoteCommands(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  sessionId: string,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): Promise<void> {
   const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/commands`, {
     headers: await tuiHeaders(false),
   });
+  if (response.status === 404) {
+    await reRegisterTuiSessionAfterHeartbeatMiss(ctx, sessionId, activeSessionIds, pollTimers);
+    return;
+  }
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
   for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command);
+}
+
+async function reRegisterTuiSessionAfterHeartbeatMiss(
+  ctx: ExtensionCommandContext,
+  sessionId: string,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): Promise<void> {
+  if (!activeSessionIds.has(sessionId)) return;
+
+  let response: Response;
+  try {
+    response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+      method: "POST",
+      headers: await tuiHeaders(),
+      body: JSON.stringify(toRegistration(ctx)),
+    });
+  } catch {
+    disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
+    return;
+  }
+
+  if (response.ok) return;
+  disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
+}
+
+function disconnectLocalSession(
+  ctx: ExtensionContext,
+  sessionId: string,
+  activeSessionIds: Set<string>,
+  pollTimers: Map<string, NodeJS.Timeout>,
+): void {
+  if (!activeSessionIds.has(sessionId)) return;
+  deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
+  ctx.ui.notify("Remote control disconnected; run /remote-control to re-enable", "warning");
 }
 
 export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort">, command: RemoteTuiCommand): void {

@@ -84,6 +84,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -230,6 +231,69 @@ describe("remote control extension", () => {
       { key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" },
       { key: "remote-control", text: undefined },
     ]);
+  });
+
+  it("re-registers a locally active TUI session when daemon heartbeat state is missing", async () => {
+    vi.useFakeTimers();
+    const { pi, commands } = createFakePi();
+    const { ctx, statuses } = createContext();
+    const fetchCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith("/commands")) return new Response(JSON.stringify({ error: "session_not_found" }), { status: 404 });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(fetchCalls).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions",
+        method: "POST",
+        body: expect.objectContaining({ id: "sess_pi_1", piSessionId: "pi_1", sessionFile: "/tmp/session.jsonl" }),
+      },
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/commands", method: "GET", body: undefined },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions",
+        method: "POST",
+        body: expect.objectContaining({ id: "sess_pi_1", piSessionId: "pi_1", sessionFile: "/tmp/session.jsonl" }),
+      },
+    ]);
+    expect(statuses).toEqual([{ key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" }]);
+  });
+
+  it("clears local active state when heartbeat re-registration fails", async () => {
+    vi.useFakeTimers();
+    const { pi, commands } = createFakePi();
+    const { ctx, statuses, notifications } = createContext();
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    let registrationAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET" });
+        if (url.endsWith("/commands")) return new Response(JSON.stringify({ error: "session_not_found" }), { status: 404 });
+        registrationAttempts += 1;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: registrationAttempts === 1 ? 200 : 503 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(statuses).toEqual([
+      { key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" },
+      { key: "remote-control", text: undefined },
+    ]);
+    expect(notifications.at(-1)).toEqual({ message: "Remote control disconnected; run /remote-control to re-enable", type: "warning" });
+    expect(fetchCalls.filter((call) => call.url.endsWith("/commands"))).toHaveLength(1);
   });
 
   it("clears active status and unregisters on session shutdown", async () => {
