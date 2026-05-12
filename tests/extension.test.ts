@@ -533,16 +533,19 @@ describe("remote control extension", () => {
   it("applies queued remote commands to the TUI runtime", () => {
     const sendUserMessage = vi.fn();
     const abort = vi.fn();
+    const compact = vi.fn();
     handleRemoteCommand({ sendUserMessage } as never, { abort } as never, {
       type: "remote_prompt",
       requestId: "req_1",
       text: "hello",
       streamingBehavior: "followUp",
     });
-    handleRemoteCommand({ sendUserMessage } as never, { abort } as never, { type: "remote_abort", requestId: "req_2" });
+    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, { type: "remote_abort", requestId: "req_2" });
+    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, { type: "remote_compact", requestId: "req_3" });
 
     expect(sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "followUp" });
     expect(abort).toHaveBeenCalledOnce();
+    expect(compact).toHaveBeenCalledOnce();
   });
 
   it("runs local pairing command from remote-control-pair", async () => {

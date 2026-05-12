@@ -35,7 +35,8 @@ export type ActiveSessionSummary = {
 
 export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
-  | { type: "remote_abort"; requestId: string };
+  | { type: "remote_abort"; requestId: string }
+  | { type: "remote_compact"; requestId: string };
 
 export type ActiveSessionState = TranscriptPage & {
   session: ActiveSessionSummary;

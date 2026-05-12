@@ -693,6 +693,49 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("queues compact for active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/compact`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([{ type: "remote_compact", requestId: expect.stringMatching(/^req_/) }]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects compact for inactive TUI sessions", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/missing/compact`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "session_not_active" });
+      },
+      { activeSessions: createActiveSessionRegistry(), authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("queues abort for active TUI sessions", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({

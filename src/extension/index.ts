@@ -305,12 +305,13 @@ function disconnectLocalSession(
   ctx.ui.notify("Remote control disconnected; run /remote-control to re-enable", "warning");
 }
 
-export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort">, command: RemoteTuiCommand): void {
+export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort" | "compact">, command: RemoteTuiCommand): void {
   if (command.type === "remote_prompt") {
     pi.sendUserMessage(command.text, command.streamingBehavior ? { deliverAs: command.streamingBehavior } : undefined);
     return;
   }
   if (command.type === "remote_abort") ctx.abort();
+  if (command.type === "remote_compact") void ctx.compact();
 }
 
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {

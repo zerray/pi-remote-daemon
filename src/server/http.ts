@@ -47,6 +47,7 @@ export type SessionService = {
   getSessionMessages?(sessionId: string, request: { before: string; limit: number }): Promise<TranscriptPage>;
   promptSession?(sessionId: string, request: PromptSessionRequest): Promise<void>;
   abortSession?(sessionId: string): Promise<void>;
+  compactSession?(sessionId: string): Promise<void>;
   streamSession?(sessionId: string, send: (event: unknown) => void): Promise<void>;
 };
 
@@ -273,6 +274,26 @@ async function handleHttpRequest(
       await options.sessionService?.abortSession?.(sessionId);
     }
     writeJson(response, 200, { aborted: true });
+    return;
+  }
+
+  const compactMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/compact$/);
+  if (request.method === "POST" && compactMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(compactMatch[1] ?? "");
+    if (options.activeSessions) {
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_compact", requestId: nextRequestId() })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    } else {
+      await options.sessionService?.compactSession?.(sessionId);
+    }
+    writeJson(response, 200, { accepted: true });
     return;
   }
 
