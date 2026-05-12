@@ -248,6 +248,7 @@ type TranscriptStreamEvent =
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; partialResult: unknown }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result?: unknown; isError: boolean }
   | { type: "runtime_status"; status: RuntimeStatus }
+  | RemoteCompactResultEvent
   | { type: "session_closed" }
   | { type: "error"; error: string };
 
@@ -256,9 +257,13 @@ type TranscriptMessagePatch =
   | { type: "thinking_delta"; delta: string }
   | { type: "toolCall"; toolCall: { type: "toolCall"; id: string; name: string; arguments: unknown } }
   | { type: "replace"; message: TranscriptMessage };
+
+type RemoteCompactResultEvent =
+  | { type: "remote_compact_result"; requestId: string; ok: true; summary: string; firstKeptEntryId: string; tokensBefore: number }
+  | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed runtime-status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed runtime-status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. `remote_compact_result` reports the asynchronous outcome of a remote compact request and is correlated by `requestId`; it is not stored in daemon durable state. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
 
 ## TUI control channel
 
@@ -272,7 +277,7 @@ type TuiControlChannel = {
 };
 ```
 
-The control channel is the daemon's route for sending remote prompt and abort commands to the owning TUI extension. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
+The control channel is the daemon's route for sending remote prompt, abort, and compact commands to the owning TUI extension and for receiving compact results. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
 
 ## Tool state
 

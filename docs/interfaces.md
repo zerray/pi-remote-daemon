@@ -283,13 +283,14 @@ Response:
 
 `POST /v1/sessions/{sessionId}/compact`
 
-Forwards a compact request to the TUI extension that owns the active session. This is the remote-control equivalent of running `/compact` in the Pi TUI. It is an explicit allowlisted action, not generic slash-command passthrough.
+Forwards a compact request to the TUI extension that owns the active session. This is the remote-control equivalent of running `/compact` in the Pi TUI. It is an explicit allowlisted action, not generic slash-command passthrough. The HTTP response only confirms that the daemon accepted the command for delivery; the asynchronous compaction outcome is reported later on the session WebSocket as `remote_compact_result`.
 
 Response:
 
 ```json
 {
-  "accepted": true
+  "accepted": true,
+  "requestId": "req_..."
 }
 ```
 
@@ -305,7 +306,7 @@ If the session has no active TUI owner, the daemon returns `409`:
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, `remote_compact_result`, `session_closed`, and errors. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be visible only on the stream.
 
 The initial `session_state` contains at most 20 recent messages regardless of the HTTP transcript default. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
 
@@ -375,6 +376,15 @@ Runtime status events:
 
 The daemon sends `runtime_status` when the owning TUI extension reports a changed runtime-status snapshot. Clients should treat the event as replacing the previous runtime status for that session.
 
+Remote compact result events:
+
+```json
+{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "Conversation summary...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }
+{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "Compaction failed: ..." }
+```
+
+The daemon sends `remote_compact_result` when the owning TUI extension reports completion or failure for a prior `remote_compact` command. Clients correlate the result with the `requestId` returned by `POST /v1/sessions/{sessionId}/compact`. Compact results are live stream events and are not included in HTTP session snapshots.
+
 ## Pi TUI extension ↔ daemon
 
 The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. Loopback TUI requests are accepted without a bearer token; non-loopback callers must provide a valid bearer token. The extension normally calls `127.0.0.1:<configured-port>` even when iOS uses `advertisedBaseUrl` over Tailscale.
@@ -431,7 +441,7 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 While active, the extension forwards Pi extension events and runtime-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably.
 
 ### Daemon-to-TUI commands
 
@@ -443,7 +453,7 @@ The daemon forwards iOS requests to the owning TUI extension:
 { "type": "remote_compact", "requestId": "req_..." }
 ```
 
-Command acknowledgements are not part of the current MVP protocol.
+Prompt and abort command acknowledgements are not part of the current MVP protocol. Compact completion is reported asynchronously through `remote_compact_result`.
 
 ## Pi integration boundary
 
@@ -456,5 +466,5 @@ The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is
 | List remote sessions | Daemon active TUI session registry. |
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
-| Compact | iOS → daemon → owning TUI extension → Pi extension API `ctx.compact()`. |
-| Stream events | Raw Pi event/status snapshot → TUI extension → daemon normalization/storage → iOS WebSocket normalized transcript or status event. |
+| Compact | iOS → daemon → owning TUI extension → Pi extension API `ctx.compact()` → TUI-reported `remote_compact_result` → iOS WebSocket. |
+| Stream events | Raw Pi event/status snapshot or remote-action result → TUI extension → daemon normalization/storage/forwarding → iOS WebSocket normalized transcript, status, or result event. |
