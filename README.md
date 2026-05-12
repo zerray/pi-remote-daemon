@@ -10,7 +10,27 @@ Install as a Pi package:
 pi install https://github.com/zerray/pi-remote-control
 ```
 
-After installation, open a Pi TUI session and run:
+After installation, edit `~/.pi/remote-control/config.json` so iOS can reach the daemon. Use a LAN IP or Tailscale address. Exposing the daemon on a public IP is at your own risk.
+
+LAN example:
+
+```json
+{
+  "bindAddress": "192.168.1.23:17373",
+  "advertisedBaseUrl": "http://192.168.1.23:17373"
+}
+```
+
+Tailscale example:
+
+```json
+{
+  "bindAddress": "100.86.12.34:17373",
+  "advertisedBaseUrl": "http://100.86.12.34:17373"
+}
+```
+
+Then open a Pi TUI session and run:
 
 ```text
 /remote-control-pair  # display QR code for iOS pairing
