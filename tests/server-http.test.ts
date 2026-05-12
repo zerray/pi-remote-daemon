@@ -263,6 +263,45 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("broadcasts remote compact results to iOS WebSocket subscribers", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+        const event = { type: "remote_compact_result", requestId: "req_1", ok: true, summary: "Summary", firstKeptEntryId: "entry_1", tokensBefore: 12345 };
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify(event),
+        });
+
+        expect(response.status).toBe(200);
+        await vi.waitFor(() => expect(messages).toContainEqual(event));
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("broadcasts normalized TUI session events to iOS WebSocket subscribers", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
@@ -714,8 +753,9 @@ describe("daemon HTTP server", () => {
         });
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({ accepted: true });
-        expect(activeSessions.takeCommands("sess_1")).toEqual([{ type: "remote_compact", requestId: expect.stringMatching(/^req_/) }]);
+        const body = (await response.json()) as { accepted: boolean; requestId: string };
+        expect(body).toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([{ type: "remote_compact", requestId: body.requestId }]);
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );

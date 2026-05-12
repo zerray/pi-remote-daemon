@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RuntimeStatus } from "../types.js";
+import type { DaemonConfig, RemoteCompactResultEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -226,6 +226,11 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isRemoteCompactResultEvent(event)) {
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     const normalizedEvents = normalizeTuiEvent(event);
     streamHub.get(sessionId)?.forEach((webSocket) => normalizedEvents.forEach((normalizedEvent) => sendWebSocketJson(webSocket, normalizedEvent)));
     writeJson(response, 200, { accepted: true });
@@ -285,15 +290,16 @@ async function handleHttpRequest(
     }
 
     const sessionId = decodeURIComponent(compactMatch[1] ?? "");
+    const requestId = nextRequestId();
     if (options.activeSessions) {
-      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_compact", requestId: nextRequestId() })) {
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_compact", requestId })) {
         writeJson(response, 409, { error: "session_not_active" });
         return;
       }
     } else {
       await options.sessionService?.compactSession?.(sessionId);
     }
-    writeJson(response, 200, { accepted: true });
+    writeJson(response, 200, { accepted: true, requestId });
     return;
   }
 
@@ -460,6 +466,16 @@ function isLoopbackRemoteAddress(address: string | undefined): boolean {
 
 function isRuntimeStatusEvent(event: unknown): event is { type: "runtime_status"; status: RuntimeStatus } {
   return Boolean(event && typeof event === "object" && (event as { type?: unknown }).type === "runtime_status" && (event as { status?: unknown }).status && typeof (event as { status?: unknown }).status === "object");
+}
+
+function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "remote_compact_result" || typeof record.requestId !== "string") return false;
+  if (record.ok === true) {
+    return typeof record.summary === "string" && typeof record.firstKeptEntryId === "string" && typeof record.tokensBefore === "number";
+  }
+  return record.ok === false && typeof record.message === "string";
 }
 
 function nextRequestId(): string {

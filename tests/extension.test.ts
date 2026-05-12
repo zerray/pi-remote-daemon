@@ -533,22 +533,53 @@ describe("remote control extension", () => {
     });
   });
 
-  it("applies queued remote commands to the TUI runtime", () => {
+  it("applies queued remote prompt and abort commands to the TUI runtime", () => {
     const sendUserMessage = vi.fn();
     const abort = vi.fn();
     const compact = vi.fn();
-    handleRemoteCommand({ sendUserMessage } as never, { abort } as never, {
+    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, {
       type: "remote_prompt",
       requestId: "req_1",
       text: "hello",
       streamingBehavior: "followUp",
     });
     handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, { type: "remote_abort", requestId: "req_2" });
-    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, { type: "remote_compact", requestId: "req_3" });
 
     expect(sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "followUp" });
     expect(abort).toHaveBeenCalledOnce();
-    expect(compact).toHaveBeenCalledOnce();
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("posts remote compact success and failure results from TUI callbacks", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const compact = vi.fn();
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { abort: vi.fn(), compact } as never, { type: "remote_compact", requestId: "req_3" }, "sess_pi_1");
+    const options = compact.mock.calls[0]?.[0] as {
+      onComplete(result: unknown): void;
+      onError(error: Error): void;
+    };
+    options.onComplete({ summary: "Summary", firstKeptEntryId: "entry_1", tokensBefore: 12345 });
+    options.onError(new Error("No compaction needed"));
+
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(2));
+    expect(fetchCalls).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "remote_compact_result", requestId: "req_3", ok: true, summary: "Summary", firstKeptEntryId: "entry_1", tokensBefore: 12345 } },
+      },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "remote_compact_result", requestId: "req_3", ok: false, message: "No compaction needed" } },
+      },
+    ]);
   });
 
   it("runs local pairing command from remote-control-pair", async () => {

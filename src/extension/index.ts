@@ -3,6 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
+import type { RemoteCompactResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
@@ -152,6 +153,10 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function setRemoteControlStatus(ctx: ExtensionContext): void {
   ctx.ui.setStatus("remote-control", ctx.ui.theme.fg("success", "Remote Control Active"));
 }
@@ -262,7 +267,7 @@ async function pollRemoteCommands(
   }
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
-  for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command);
+  for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command, sessionId);
 }
 
 async function reRegisterTuiSessionAfterHeartbeatMiss(
@@ -305,13 +310,48 @@ function disconnectLocalSession(
   ctx.ui.notify("Remote control disconnected; run /remote-control to re-enable", "warning");
 }
 
-export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort" | "compact">, command: RemoteTuiCommand): void {
+export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort" | "compact">, command: RemoteTuiCommand, sessionId?: string): void {
   if (command.type === "remote_prompt") {
     pi.sendUserMessage(command.text, command.streamingBehavior ? { deliverAs: command.streamingBehavior } : undefined);
     return;
   }
   if (command.type === "remote_abort") ctx.abort();
-  if (command.type === "remote_compact") void ctx.compact();
+  if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
+}
+
+function handleRemoteCompactCommand(ctx: Pick<ExtensionCommandContext, "compact">, requestId: string, sessionId: string | undefined): void {
+  const postResult = (event: RemoteCompactResultEvent) => {
+    if (sessionId) void postTuiEvent(sessionId, event).catch(() => undefined);
+  };
+  try {
+    ctx.compact({
+      onComplete: (result) => postResult(toRemoteCompactSuccessEvent(requestId, result)),
+      onError: (error) => postResult(toRemoteCompactErrorEvent(requestId, error)),
+    });
+  } catch (error) {
+    postResult(toRemoteCompactErrorEvent(requestId, error));
+  }
+}
+
+function toRemoteCompactSuccessEvent(requestId: string, result: unknown): RemoteCompactResultEvent {
+  const record = asRecord(result);
+  return {
+    type: "remote_compact_result",
+    requestId,
+    ok: true,
+    summary: readString(record.summary) ?? "",
+    firstKeptEntryId: readString(record.firstKeptEntryId) ?? "",
+    tokensBefore: readNumber(record.tokensBefore) ?? 0,
+  };
+}
+
+function toRemoteCompactErrorEvent(requestId: string, error: unknown): RemoteCompactResultEvent {
+  return {
+    type: "remote_compact_result",
+    requestId,
+    ok: false,
+    message: error instanceof Error ? error.message : String(error),
+  };
 }
 
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {
