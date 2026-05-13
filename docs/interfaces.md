@@ -251,7 +251,7 @@ Request:
 }
 ```
 
-`streamingBehavior` is `null`, `"steer"`, or `"followUp"`.
+`streamingBehavior` is `null`, `"steer"`, or `"followUp"`. `null` sends immediately when the TUI is idle; if the TUI is already busy, the extension delivers it as `"followUp"` so Pi does not reject the remote prompt for missing streaming delivery mode.
 
 Response:
 

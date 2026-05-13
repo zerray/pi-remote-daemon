@@ -537,17 +537,30 @@ describe("remote control extension", () => {
     const sendUserMessage = vi.fn();
     const abort = vi.fn();
     const compact = vi.fn();
-    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, {
+    handleRemoteCommand({ sendUserMessage } as never, { abort, compact, isIdle: () => true } as never, {
       type: "remote_prompt",
       requestId: "req_1",
       text: "hello",
       streamingBehavior: "followUp",
     });
-    handleRemoteCommand({ sendUserMessage } as never, { abort, compact } as never, { type: "remote_abort", requestId: "req_2" });
+    handleRemoteCommand({ sendUserMessage } as never, { abort, compact, isIdle: () => true } as never, { type: "remote_abort", requestId: "req_2" });
 
     expect(sendUserMessage).toHaveBeenCalledWith("hello", { deliverAs: "followUp" });
     expect(abort).toHaveBeenCalledOnce();
     expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("defaults remote prompts without streamingBehavior to followUp while the TUI is busy", () => {
+    const sendUserMessage = vi.fn();
+
+    handleRemoteCommand({ sendUserMessage } as never, { abort: vi.fn(), compact: vi.fn(), isIdle: () => false } as never, {
+      type: "remote_prompt",
+      requestId: "req_1",
+      text: "hello while busy",
+      streamingBehavior: null,
+    });
+
+    expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
   });
 
   it("posts remote compact success and failure results from TUI callbacks", async () => {
