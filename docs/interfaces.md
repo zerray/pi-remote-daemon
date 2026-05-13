@@ -350,7 +350,7 @@ Turn lifecycle events:
 
 `turn_start` marks an active model/tool turn. `turn_end` marks that the turn is complete. Transcript content is still delivered through message and tool events.
 
-Message lifecycle events:
+Message lifecycle events. `transcript_message_start` is emitted for assistant streaming messages; non-streaming user messages are emitted once as `transcript_message_end` to avoid duplicate client display.
 
 ```json
 { "type": "transcript_message_start", "message": { "id": "msg_...", "role": "assistant", "content": [], "text": "", "createdAt": "2026-05-09T09:47:00.000Z", "isStreaming": true } }

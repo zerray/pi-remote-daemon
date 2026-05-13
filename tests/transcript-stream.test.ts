@@ -34,6 +34,28 @@ describe("TUI event transcript stream normalization", () => {
     }]);
   });
 
+  it("does not emit message_start for non-streaming user messages", () => {
+    expect(normalizeTuiEvent({
+      type: "message_start",
+      message: { id: "msg_user_1", role: "user", timestamp: 1778284801000, content: "hello" },
+    })).toEqual([]);
+
+    expect(normalizeTuiEvent({
+      type: "message_end",
+      message: { id: "msg_user_1", role: "user", timestamp: 1778284801000, content: "hello" },
+    })).toEqual([{
+      type: "transcript_message_end",
+      message: {
+        id: "msg_user_1",
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        text: "hello",
+        createdAt: "2026-05-09T00:00:01.000Z",
+        isStreaming: false,
+      },
+    }]);
+  });
+
   it("normalizes assistant message deltas to transcript message patches", () => {
     expect(normalizeTuiEvent({
       type: "message_update",

@@ -15,6 +15,7 @@ export function normalizeTuiEvent(event: unknown): TranscriptStreamEvent[] {
       return turnIndex === undefined ? [] : [{ type: "turn_end", turnIndex }];
     }
     case "message_start":
+      if (asRecord(record.message).role !== "assistant") return [];
       return transcriptMessageFromPiMessage({ id: messageId(record), timestamp: record.timestamp, message: record.message, isStreaming: true })
         .map((message) => ({ type: "transcript_message_start", message }));
     case "message_end":
