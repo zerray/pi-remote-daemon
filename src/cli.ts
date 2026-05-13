@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createActiveSessionRegistry } from "./active-session-registry.js";
 import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./config.js";
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
@@ -24,6 +25,7 @@ export type CliDependencies = {
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
+  getPiVersion?: () => string | Promise<string>;
   writeLine?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
 };
@@ -61,9 +63,11 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
   const config = { ...loadedConfig, bindAddress: parsed.bindAddress ?? loadedConfig.bindAddress };
   const devToken = env.PI_REMOTE_CONTROL_DEV_TOKEN;
   const store = await (deps.openStore ?? openStore)(stateDir);
+  const piVersion = await (deps.getPiVersion ?? readInstalledPiVersion)();
   const server = await (deps.startServer ?? startDaemonServer)({
     stateDir,
     config,
+    piVersion,
     authenticateToken: devToken ? (token) => token === devToken || store.authenticateToken(token) : (token) => store.authenticateToken(token),
     activeSessions: createActiveSessionRegistry({ isProcessRunning }),
     pairService: {
@@ -179,6 +183,26 @@ async function openStore(stateDir: string): Promise<DaemonStore> {
   return openDaemonStore(stateDir);
 }
 
+export async function readInstalledPiVersion(): Promise<string> {
+  try {
+    let directory = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+    while (true) {
+      const packageJsonPath = join(directory, "package.json");
+      try {
+        const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as { name?: unknown; version?: unknown };
+        if (packageJson.name === "@earendil-works/pi-coding-agent" && typeof packageJson.version === "string") return packageJson.version;
+      } catch (error) {
+        if (!isNodeErrorCode(error, "ENOENT")) return "unknown";
+      }
+      const parent = dirname(directory);
+      if (parent === directory) return "unknown";
+      directory = parent;
+    }
+  } catch {
+    return "unknown";
+  }
+}
+
 function parseStateDirArg(args: string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === "--state-dir") return args[index + 1];
@@ -193,6 +217,10 @@ function isProcessRunning(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }
 
 function parseStartArgs(args: string[]): { stateDir?: string; bindAddress?: string } {

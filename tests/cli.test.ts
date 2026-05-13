@@ -2,9 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { main, type CliDependencies } from "../src/cli.js";
+import { main, readInstalledPiVersion, type CliDependencies } from "../src/cli.js";
 
 describe("daemon CLI", () => {
+  it("reads the installed Pi package version", async () => {
+    await expect(readInstalledPiVersion()).resolves.toMatch(/^\d+\.\d+\.\d+/);
+  });
   it("starts the HTTP server with state dir and bind overrides", async () => {
     const lines: string[] = [];
     const calls: unknown[] = [];
@@ -31,6 +34,10 @@ describe("daemon CLI", () => {
         createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
         claimPairingCode: async () => undefined,
       }),
+      getPiVersion: async () => {
+        calls.push({ getPiVersion: true });
+        return "0.74.0-test";
+      },
       waitForShutdown: async () => undefined,
       removeFile: async (path) => {
         calls.push({ removeFile: path });
@@ -46,10 +53,12 @@ describe("daemon CLI", () => {
       { ensureStateDir: "/tmp/state" },
       { acquireLock: "/tmp/state" },
       { saveConfig: "/tmp/state", config: { bindAddress: "127.0.0.1:17373" } },
+      { getPiVersion: true },
       {
         startServer: expect.objectContaining({
           stateDir: "/tmp/state",
           config: { bindAddress: "127.0.0.1:0" },
+          piVersion: "0.74.0-test",
         }),
       },
       { releaseLock: true },
