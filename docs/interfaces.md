@@ -40,7 +40,7 @@ Response:
 ```json
 {
   "status": "ok",
-  "daemonVersion": "0.1.0"
+  "daemonVersion": "1.0.0"
 }
 ```
 

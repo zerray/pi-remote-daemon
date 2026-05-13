@@ -164,7 +164,7 @@ async function handleHttpRequest(
     writeJson(response, 200, {
       status: "ok",
       piVersion: options.piVersion ?? "unknown",
-      daemonVersion: options.daemonVersion ?? "0.1.0",
+      daemonVersion: options.daemonVersion ?? "1.0.0",
     });
     return;
   }
