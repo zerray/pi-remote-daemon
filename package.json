@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Authenticated remote control for Pi sessions.",
+  "keywords": ["pi-package"],
   "bin": {
     "pi-remote-control": "./src/cli-runner.cjs"
   },
