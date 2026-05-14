@@ -89,13 +89,13 @@ Response:
 }
 ```
 
-`messageCount` is the daemon-computed count of visible conversation messages derived from the session file. It includes top-level `user` and `assistant` transcript messages only. Assistant thinking and tool-use blocks are content within an assistant message and do not increment the count separately. Top-level `toolResult`, `system`, internal tool execution, lifecycle, and other non-conversation records are excluded.
+`messageCount` is the daemon-computed count of top-level `user` and `assistant` transcript messages derived from the session file. Assistant messages whose `stopReason` is `"toolUse"` are included, because the app can show tool-call activity and details. Assistant thinking and tool-use blocks are content within an assistant message and do not increment the count separately. Top-level `toolResult`, `system`, internal tool execution, lifecycle, and other non-message records are excluded.
 
 `POST /v1/projects/{projectId}/sessions` returns `405 method_not_allowed`. New sessions are created in the Pi TUI, then made visible by running `/remote-control`.
 
 `GET /v1/sessions/{sessionId}?messageLimit={limit}`
 
-Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window read from the session's Pi JSONL `sessionFile`. `session.messageCount` uses the visible conversation count semantics described above. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window read from the session's Pi JSONL `sessionFile`. `session.messageCount` uses the transcript message count semantics described above. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -408,7 +408,7 @@ Response payload:
 
 ### Session registration
 
-When `/remote-control` enables a session, the extension registers the current TUI session. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed visible conversation counts from `sessionFile` when available:
+When `/remote-control` enables a session, the extension registers the current TUI session. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed transcript message counts from `sessionFile` when available:
 
 ```json
 {
