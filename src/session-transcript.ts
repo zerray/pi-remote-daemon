@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { asRecord, readString, transcriptMessageFromPiMessage } from "./transcript-message.js";
 import type { TranscriptMessage } from "./types.js";
 
+export function visibleConversationMessageCount(messages: TranscriptMessage[]): number {
+  return messages.filter((message) => message.role === "user" || message.role === "assistant").length;
+}
+
 export function readSessionTranscriptMessages(sessionFile: string): TranscriptMessage[] {
   let text: string;
   try {

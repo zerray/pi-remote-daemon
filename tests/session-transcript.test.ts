@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readSessionTranscriptMessages } from "../src/session-transcript.js";
+import { readSessionTranscriptMessages, visibleConversationMessageCount } from "../src/session-transcript.js";
 
 let root: string;
 
@@ -67,6 +67,15 @@ describe("session transcript files", () => {
         isStreaming: false,
       },
     ]);
+  });
+
+  it("counts only visible user and assistant conversation messages", () => {
+    expect(visibleConversationMessageCount([
+      { id: "msg_1", role: "user", content: [{ type: "text", text: "hello" }], text: "hello", createdAt: "2026-05-09T00:00:01.000Z", isStreaming: false },
+      { id: "msg_2", role: "assistant", content: [{ type: "thinking", thinking: "checking" }, { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }, { type: "text", text: "done" }], text: "done", createdAt: "2026-05-09T00:00:02.000Z", isStreaming: false },
+      { id: "msg_3", role: "toolResult", content: [{ type: "text", text: "file.txt" }], text: "file.txt", createdAt: "2026-05-09T00:00:03.000Z", isStreaming: false },
+      { id: "msg_4", role: "system", content: [{ type: "text", text: "system" }], text: "system", createdAt: "2026-05-09T00:00:04.000Z", isStreaming: false },
+    ])).toBe(2);
   });
 
   it("returns an empty transcript when the session file is missing", () => {

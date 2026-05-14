@@ -1,4 +1,5 @@
-import { readSessionTranscriptMessages } from "./session-transcript.js";
+import { existsSync } from "node:fs";
+import { readSessionTranscriptMessages, visibleConversationMessageCount } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
 import type { RuntimeStatus, ToolCallStatus } from "./types.js";
 
@@ -133,7 +134,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       pruneInactiveSessions();
       return [...sessions.values()]
         .filter((session) => session.project.id === projectId)
-        .map((session) => session.summary)
+        .map((session) => currentSummary(session))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     },
 
@@ -145,7 +146,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       return {
         session: {
           ...session.summary,
-          messageCount: messages.length,
+          messageCount: sessionFileExists(session) ? visibleConversationMessageCount(messages) : session.summary.messageCount,
           updatedAt: messages.at(-1)?.createdAt ?? session.summary.updatedAt,
         },
         ...recentTranscriptWindow(messages, options?.messageLimit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT),
@@ -189,6 +190,19 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       return commands;
     },
   };
+}
+
+function currentSummary(session: StoredActiveSession): ActiveSessionSummary {
+  const messages = readSessionTranscriptMessages(session.sessionFile);
+  return {
+    ...session.summary,
+    messageCount: sessionFileExists(session) ? visibleConversationMessageCount(messages) : session.summary.messageCount,
+    updatedAt: messages.at(-1)?.createdAt ?? session.summary.updatedAt,
+  };
+}
+
+function sessionFileExists(session: Pick<ActiveSessionRegistration, "sessionFile">): boolean {
+  return session.sessionFile.length > 0 && existsSync(session.sessionFile);
 }
 
 function toSummary(session: ActiveSessionRegistration): ActiveSessionSummary {

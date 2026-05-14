@@ -108,6 +108,35 @@ describe("active TUI session registry", () => {
     expect(registry.takeCommands("sess_1")).toEqual([]);
   });
 
+  it("uses visible conversation message counts for active session summaries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-registry-count-"));
+    const sessionFile = join(root, "session.jsonl");
+    const registry = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "hello" } }),
+        JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "checking" }, { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }, { type: "text", text: "done" }] } }),
+        JSON.stringify({ type: "message", id: "msg_3", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "toolResult", toolCallId: "call_1", toolName: "bash", content: [{ type: "text", text: "file.txt" }] } }),
+        JSON.stringify({ type: "message", id: "msg_4", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "system", content: "system" } }),
+      ].join("\n"));
+      registry.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 999,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      });
+
+      expect(registry.listProjectSessions("proj_1")[0]?.messageCount).toBe(2);
+      expect(registry.getSessionState("sess_1")?.session.messageCount).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns snapshots for active sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-registry-"));
     const sessionFile = join(root, "session.jsonl");
