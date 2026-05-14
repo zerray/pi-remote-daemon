@@ -1,8 +1,8 @@
-# Count public transcript messages
+# Count visible conversation messages
 
 ## Title
 
-Count public transcript messages
+Count visible conversation messages
 
 ## Status
 
@@ -16,13 +16,15 @@ This causes the session list count to be noticeably larger than the message coun
 
 ## Decision
 
-Change the daemon-owned public meaning of `messageCount` to the count of public `TranscriptMessage` values derived from the session's Pi JSONL `sessionFile`, using the same normalization path as HTTP transcript reads.
+Change the daemon-owned public meaning of `messageCount` to the count of visible conversation messages derived from the session's Pi JSONL `sessionFile`.
 
-For active TUI sessions, the daemon treats `messageCount` in TUI registration as an initial hint only. Public session summaries and session-state responses use the daemon-computed public transcript count when the session file is readable. The count excludes Pi entries that do not normalize to public transcript messages.
+A visible conversation message is a top-level public transcript message with role `user` or `assistant`. Assistant thinking and tool-use blocks are content within an assistant message and do not increment the count separately. Top-level `toolResult`, `system`, internal tool execution, lifecycle, and other non-conversation records are excluded.
+
+For active TUI sessions, the daemon treats `messageCount` in TUI registration as an initial hint only. Public session summaries and session-state responses use the daemon-computed visible conversation count when the session file is readable.
 
 ## Consequences
 
-The session list count matches the app's conversation-page message model instead of raw Pi session-entry counts.
+The session list count matches the app's conversation-page message model instead of raw Pi session-entry counts or tool/system activity counts.
 
 Changing `messageCount` semantics is acceptable because the app only uses it for display. Clients that need raw Pi entry counts should use a separate future field rather than overloading `messageCount`.
 
