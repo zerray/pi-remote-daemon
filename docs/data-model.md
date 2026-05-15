@@ -93,7 +93,7 @@ type PairingLink = {
 };
 ```
 
-The raw link is encoded as a `pi-remote://pair?...` URL and rendered as a QR code by `/remote-control-pair`. The raw link is not printed as a separate TUI text line.
+The raw link is encoded as a `pi-remote://pair?...` URL and rendered as a QR code by `/remote-control-pair`. The same link is also printed as a UTF-8 hex string for desktop copy/paste pairing. The raw link is not printed as a separate TUI text line, and hex encoding is presentation obfuscation only.
 
 ## Paired device
 

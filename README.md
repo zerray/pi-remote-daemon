@@ -33,7 +33,7 @@ Tailscale example:
 Then open a Pi TUI session and run:
 
 ```text
-/remote-control-pair  # display QR code for iOS pairing
+/remote-control-pair  # display QR code and desktop hex payload for pairing
 /remote-control       # toggle this TUI session for remote control
 ```
 

@@ -8,7 +8,7 @@ Remote endpoints require `Authorization: Bearer <device-token>` unless explicitl
 
 Pair-code creation is not available through the remote iOS API. Codes are created only from the Pi TUI with `/remote-control-pair`.
 
-`/remote-control-pair` displays a QR code that encodes a pairing link and prints the expiration time. The numeric pair code and raw pairing link are not printed as separate TUI text lines. `baseUrl` comes from daemon config `advertisedBaseUrl` and must be reachable from iOS.
+`/remote-control-pair` displays a QR code that encodes a pairing link, prints a desktop pairing payload as a UTF-8 hex encoding of the same link, and prints the expiration time. The numeric pair code and raw pairing link are not printed as separate TUI text lines. Hex encoding is not a security mechanism; pairing security remains the short-lived pair code and expiration. `baseUrl` comes from daemon config `advertisedBaseUrl` and must be reachable from the client.
 
 `POST /v1/pair/claim` is unauthenticated because the short-lived pair code is the bootstrap proof.
 
@@ -393,7 +393,7 @@ The TUI control interface is package-internal and used by the Pi extension, not 
 
 ### Pair code creation
 
-`/remote-control-pair` asks the daemon to create one short-lived pair code and displays it in the TUI as a QR code plus expiration time.
+`/remote-control-pair` asks the daemon to create one short-lived pair code and displays it in the TUI as a QR code, a desktop pairing hex payload, and expiration time.
 
 Response payload:
 

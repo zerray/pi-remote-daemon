@@ -38,7 +38,7 @@ If another Pi process loads the extension, it sees the existing daemon and may r
 The extension responsibilities are session-aware:
 
 - Register `/remote-control` as a no-argument toggle for the current TUI session.
-- Register `/remote-control-pair` as the only pair-code creation command and render its pairing link as a QR code with expiration time.
+- Register `/remote-control-pair` as the only pair-code creation command and render its pairing link as a QR code, desktop pairing hex payload, and expiration time.
 - Start the daemon on demand when either command needs it.
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
 - When a locally active session heartbeat finds that the daemon no longer has the registration, re-register the current TUI session; if re-registration fails, clear local active state and notify the user.
