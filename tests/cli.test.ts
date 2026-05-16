@@ -331,6 +331,9 @@ describe("daemon CLI", () => {
     expect(code).toBe(0);
     expect(lines[0]).toBe("Scan with Pi iOS app:");
     expect(lines[1]).toContain("█");
+    expect(lines.at(-3)).toBe("Desktop pairing hex:");
+    expect(lines.at(-2)).toMatch(/^[0-9a-f]+$/);
+    expect(lines.join("\n")).not.toContain("pi-remote://pair");
     expect(lines.at(-1)).toBe("Expires at: 2026-05-09T00:01:00.000Z");
   });
 
@@ -356,6 +359,11 @@ describe("daemon CLI", () => {
     expect(calls).toEqual([{ ensureStateDir: "/tmp/state" }, { openStore: "/tmp/state" }, { closeStore: true }]);
     expect(lines[0]).toBe("Scan with Pi iOS app:");
     expect(lines[1]).toContain("█");
-    expect(lines.slice(2)).toEqual(["Expires at: 2026-05-09T00:01:00.000Z"]);
+    expect(lines.slice(-3)).toEqual([
+      "Desktop pairing hex:",
+      expect.stringMatching(/^[0-9a-f]+$/),
+      "Expires at: 2026-05-09T00:01:00.000Z",
+    ]);
+    expect(lines.join("\n")).not.toContain("pi-remote://pair");
   });
 });
