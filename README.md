@@ -2,6 +2,8 @@
 
 Private relay daemon for iOS remote control of explicitly enabled Pi TUI sessions.
 
+App Store: https://apps.apple.com/us/app/pi-relay/id6768893799
+
 ## Run
 
 Install as a Pi package:
