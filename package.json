@@ -3,6 +3,10 @@
   "version": "1.0.2",
   "type": "module",
   "description": "Authenticated remote control for Pi sessions.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zerray/pi-remote-control"
+  },
   "keywords": ["pi-package"],
   "bin": {
     "pi-remote-control": "./src/cli-runner.cjs"
