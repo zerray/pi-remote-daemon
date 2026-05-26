@@ -17,6 +17,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const pollTimers = new Map<string, NodeJS.Timeout>();
   const runtimeStatusCache = new Map<string, string>();
   const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
+  const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) {
@@ -25,6 +26,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       const sessionNameEvent = sessionNameEventForDaemon(event);
       const events = sessionNameEvent ? [sessionNameEvent] : canonicalizer.canonicalize(event, ctx);
       events.forEach((daemonEvent) => void postTuiEvent(sessionId, daemonEvent));
+      scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, transcriptRetryTimers);
       void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
     }
   };
@@ -33,6 +35,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
     runtimeStatusCache.delete(sessionId);
     transcriptEventCanonicalizers.get(sessionId)?.reset();
     transcriptEventCanonicalizers.delete(sessionId);
+    clearTimeout(transcriptRetryTimers.get(sessionId));
+    transcriptRetryTimers.delete(sessionId);
     deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
   const cleanup = async (ctx: ExtensionContext) => {
@@ -63,6 +67,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         runtimeStatusCache.delete(sessionId);
         transcriptEventCanonicalizers.get(sessionId)?.reset();
         transcriptEventCanonicalizers.delete(sessionId);
+        clearTimeout(transcriptRetryTimers.get(sessionId));
+        transcriptRetryTimers.delete(sessionId);
         deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
         ctx.ui.notify("Remote control disabled for this session", "info");
         return;
@@ -127,6 +133,24 @@ function registerEventForwarders(
   pi.on("tool_execution_end", forward);
   pi.on("agent_start", forward);
   pi.on("agent_end", forward);
+}
+
+function scheduleTranscriptRetry(
+  sessionId: string,
+  ctx: ExtensionContext,
+  canonicalizer: ReturnType<typeof createTranscriptEventCanonicalizer>,
+  activeSessionIds: Set<string>,
+  retryTimers: Map<string, NodeJS.Timeout>,
+): void {
+  if (!canonicalizer.hasPending() || retryTimers.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    retryTimers.delete(sessionId);
+    if (!activeSessionIds.has(sessionId)) return;
+    canonicalizer.drain(ctx).forEach((event) => void postTuiEvent(sessionId, event));
+    scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, retryTimers);
+  }, 100);
+  timer.unref?.();
+  retryTimers.set(sessionId, timer);
 }
 
 function sessionNameEventForDaemon(event: unknown): unknown | undefined {

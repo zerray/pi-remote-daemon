@@ -30,6 +30,47 @@ describe("transcript event canonicalizer", () => {
     }]);
   });
 
+  it("drains pending temporary message events after the session entry appears", () => {
+    const entries: unknown[] = [];
+    const canonicalizer = createTranscriptEventCanonicalizer();
+
+    expect(canonicalizer.canonicalize({
+      type: "message_end",
+      id: "tmp_user_1",
+      timestamp: 1778284800000,
+      message: { id: "tmp_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" },
+    }, ctx(entries))).toEqual([]);
+    expect(canonicalizer.hasPending()).toBe(true);
+
+    entries.push({
+      type: "message",
+      id: "entry_user_1",
+      timestamp: "2026-05-09T00:00:00.000Z",
+      message: { role: "user", timestamp: 1778284800000, content: "sent from iOS" },
+    });
+
+    expect(canonicalizer.drain(ctx(entries))).toEqual([{
+      type: "message_end",
+      id: "entry_user_1",
+      timestamp: "2026-05-09T00:00:00.000Z",
+      message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" },
+    }]);
+    expect(canonicalizer.hasPending()).toBe(false);
+  });
+
+  it("evicts pending temporary message events after bounded retry attempts", () => {
+    const canonicalizer = createTranscriptEventCanonicalizer({ maxDrainAttempts: 1 });
+
+    expect(canonicalizer.canonicalize({
+      type: "message_end",
+      id: "tmp_1",
+      message: { id: "tmp_1", role: "assistant", content: [{ type: "text", text: "never persisted" }] },
+    }, ctx([]))).toEqual([]);
+
+    expect(canonicalizer.drain(ctx([]))).toEqual([]);
+    expect(canonicalizer.hasPending()).toBe(false);
+  });
+
   it("buffers temporary message events until a session entry id is available", () => {
     const entries: unknown[] = [];
     const canonicalizer = createTranscriptEventCanonicalizer();

@@ -533,6 +533,37 @@ describe("remote control extension", () => {
     });
   });
 
+  it("retries pending transcript events and forwards them once session entries appear", async () => {
+    vi.useFakeTimers();
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const entries: unknown[] = [];
+    ctx.sessionManager.getEntries = () => entries;
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("message_end")?.({ type: "message_end", id: "tmp_user_1", timestamp: 1778284800000, message: { id: "tmp_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } }, ctx);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(fetchCalls).toHaveLength(1);
+
+    entries.push({ type: "message", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", timestamp: 1778284800000, content: "sent from iOS" } });
+    await vi.advanceTimersByTimeAsync(100);
+
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(2));
+    expect(fetchCalls.at(-1)).toEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: { method: "POST", body: { type: "message_end", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } } },
+    });
+  });
+
   it("does not forward temporary transcript ids and flushes with canonical session entry ids", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();

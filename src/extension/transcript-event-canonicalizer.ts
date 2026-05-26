@@ -1,15 +1,20 @@
 export type TranscriptEventCanonicalizer = {
   canonicalize(event: unknown, ctx: { sessionManager: { getEntries(): unknown[] } }): unknown[];
+  drain(ctx: { sessionManager: { getEntries(): unknown[] } }): unknown[];
+  hasPending(): boolean;
   reset(): void;
 };
 
 type CanonicalEntry = { id: string; timestamp?: string };
+type PendingEvents = { events: unknown[]; drainAttempts: number };
 
 const MESSAGE_EVENT_TYPES = new Set(["message_start", "message_update", "message_end"]);
+const DEFAULT_MAX_DRAIN_ATTEMPTS = 300;
 
-export function createTranscriptEventCanonicalizer(): TranscriptEventCanonicalizer {
+export function createTranscriptEventCanonicalizer(options: { maxDrainAttempts?: number } = {}): TranscriptEventCanonicalizer {
   const canonicalIdsByTemporaryId = new Map<string, CanonicalEntry>();
-  const pendingEventsByTemporaryId = new Map<string, unknown[]>();
+  const pendingEventsByTemporaryId = new Map<string, PendingEvents>();
+  const maxDrainAttempts = options.maxDrainAttempts ?? DEFAULT_MAX_DRAIN_ATTEMPTS;
 
   return {
     canonicalize(event, ctx) {
@@ -23,17 +28,37 @@ export function createTranscriptEventCanonicalizer(): TranscriptEventCanonicaliz
       const entry = resolveCanonicalEntry(record, ctx.sessionManager.getEntries());
       if (!entry) {
         if (temporaryId) {
-          const pendingEvents = pendingEventsByTemporaryId.get(temporaryId) ?? [];
-          pendingEvents.push(event);
-          pendingEventsByTemporaryId.set(temporaryId, pendingEvents);
+          const pending = pendingEventsByTemporaryId.get(temporaryId) ?? { events: [], drainAttempts: 0 };
+          pending.events.push(event);
+          pendingEventsByTemporaryId.set(temporaryId, pending);
         }
         return [];
       }
 
       if (temporaryId) canonicalIdsByTemporaryId.set(temporaryId, entry);
-      const pendingEvents = temporaryId ? (pendingEventsByTemporaryId.get(temporaryId) ?? []) : [];
+      const pendingEvents = temporaryId ? (pendingEventsByTemporaryId.get(temporaryId)?.events ?? []) : [];
       if (temporaryId) pendingEventsByTemporaryId.delete(temporaryId);
       return [...pendingEvents, event].map((pendingEvent) => rewriteEvent(asRecord(pendingEvent), entry));
+    },
+    drain(ctx) {
+      const flushedEvents: unknown[] = [];
+      for (const [temporaryId, pending] of [...pendingEventsByTemporaryId.entries()]) {
+        const entry = pending.events
+          .map((pendingEvent) => resolveCanonicalEntry(asRecord(pendingEvent), ctx.sessionManager.getEntries()))
+          .find((candidate) => candidate !== undefined);
+        if (!entry) {
+          pending.drainAttempts += 1;
+          if (pending.drainAttempts >= maxDrainAttempts) pendingEventsByTemporaryId.delete(temporaryId);
+          continue;
+        }
+        canonicalIdsByTemporaryId.set(temporaryId, entry);
+        pendingEventsByTemporaryId.delete(temporaryId);
+        flushedEvents.push(...pending.events.map((pendingEvent) => rewriteEvent(asRecord(pendingEvent), entry)));
+      }
+      return flushedEvents;
+    },
+    hasPending() {
+      return pendingEventsByTemporaryId.size > 0;
     },
     reset() {
       canonicalIdsByTemporaryId.clear();
