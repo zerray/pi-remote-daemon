@@ -12,9 +12,9 @@ Accepted
 
 HTTP session snapshots read persisted transcript messages from Pi session JSONL files and therefore use each session entry's `id` as the public `TranscriptMessage.id`.
 
-Live WebSocket transcript events originate from Pi TUI events. Some TUI message lifecycle events can carry temporary event/message IDs before the corresponding Pi session entry is visible through the session manager. When iOS reconnects after backgrounding or lock-screen sleep, it receives a fresh `session_state` snapshot. If the earlier live event used a temporary ID and the snapshot uses the persisted entry ID, the same logical message appears under two IDs and client-side ID de-duplication cannot remove the duplicate.
+Live WebSocket transcript events originate from Pi TUI events. Some TUI message lifecycle events can carry temporary event/message IDs before the corresponding Pi session entry is visible through the session manager. Other Pi TUI message lifecycle events carry no event/message ID at all; for those events, the only stable correlation field available before persistence is the pair of `message.role` and `message.timestamp`. When iOS reconnects after backgrounding or lock-screen sleep, it receives a fresh `session_state` snapshot. If the earlier live event used a temporary ID and the snapshot uses the persisted entry ID, the same logical message appears under two IDs and client-side ID de-duplication cannot remove the duplicate.
 
-The daemon already attempts best-effort enrichment from TUI events to session-entry IDs, but that immediate stateless match is not reliable when persistence lags streaming, timestamps differ, or streaming content is incomplete.
+The daemon already attempts best-effort enrichment from TUI events to session-entry IDs, but that immediate stateless match is not reliable when persistence lags streaming or when TUI events lack IDs. Content-based matching is intentionally avoided because partial streaming content and tool-call deltas can make it ambiguous.
 
 ## Decision
 
@@ -22,7 +22,9 @@ Public transcript message IDs must be canonical across live WebSocket events and
 
 The Pi extension canonicalizes message lifecycle events before posting them to the daemon. For `message_start`, `message_update`, and `message_end` events, the extension resolves the TUI event to a unique Pi session message entry and replaces the event `id`, nested `message.id`, and timestamp with the session-entry values before forwarding.
 
-If the extension cannot yet resolve a unique session entry for a message lifecycle event, it must not forward a transcript event with a temporary ID. It may keep a bounded in-memory pending queue keyed by the TUI temporary message ID and retry resolution on later message lifecycle events. Once resolved, it flushes pending events in order using the canonical session-entry ID. If resolution never becomes unique before the bounded queue expires or is evicted, the extension drops those pending live transcript events and relies on the next HTTP snapshot/session-state read to expose the persisted message.
+If the extension cannot yet resolve a unique session entry for a message lifecycle event, it must not forward a transcript event with a temporary ID. It keeps a bounded in-memory pending queue keyed by a correlation key. The correlation key is the TUI temporary message ID when one is present; otherwise it is exactly `message.role + message.timestamp`. The extension retries resolution against current session entries and, once resolved, flushes pending events in order using the canonical session-entry ID. If resolution never becomes unique before the bounded queue expires or is evicted, the extension drops those pending live transcript events and relies on the next HTTP snapshot/session-state read to expose the persisted message.
+
+Resolution may match by session-entry ID or by exact `message.role + message.timestamp`. It must not use content hashing or fuzzy text matching.
 
 The daemon's event normalizer continues to treat incoming TUI event IDs as already canonical. Clients may keep defensive de-duplication, but correctness must not depend on fuzzy client-side matching.
 

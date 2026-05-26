@@ -12,8 +12,8 @@ const MESSAGE_EVENT_TYPES = new Set(["message_start", "message_update", "message
 const DEFAULT_MAX_DRAIN_ATTEMPTS = 300;
 
 export function createTranscriptEventCanonicalizer(options: { maxDrainAttempts?: number } = {}): TranscriptEventCanonicalizer {
-  const canonicalIdsByTemporaryId = new Map<string, CanonicalEntry>();
-  const pendingEventsByTemporaryId = new Map<string, PendingEvents>();
+  const canonicalEntriesByCorrelationKey = new Map<string, CanonicalEntry>();
+  const pendingEventsByCorrelationKey = new Map<string, PendingEvents>();
   const maxDrainAttempts = options.maxDrainAttempts ?? DEFAULT_MAX_DRAIN_ATTEMPTS;
 
   return {
@@ -21,65 +21,67 @@ export function createTranscriptEventCanonicalizer(options: { maxDrainAttempts?:
       const record = asRecord(event);
       if (!MESSAGE_EVENT_TYPES.has(readString(record.type) ?? "")) return [event];
 
-      const temporaryId = messageId(record);
-      const knownEntry = temporaryId ? canonicalIdsByTemporaryId.get(temporaryId) : undefined;
+      const key = correlationKey(record);
+      const knownEntry = key ? canonicalEntriesByCorrelationKey.get(key) : undefined;
       if (knownEntry) return [rewriteEvent(record, knownEntry)];
 
       const entry = resolveCanonicalEntry(record, ctx.sessionManager.getEntries());
       if (!entry) {
-        if (temporaryId) {
-          const pending = pendingEventsByTemporaryId.get(temporaryId) ?? { events: [], drainAttempts: 0 };
+        if (key) {
+          const pending = pendingEventsByCorrelationKey.get(key) ?? { events: [], drainAttempts: 0 };
           pending.events.push(event);
-          pendingEventsByTemporaryId.set(temporaryId, pending);
+          pendingEventsByCorrelationKey.set(key, pending);
         }
         return [];
       }
 
-      if (temporaryId) canonicalIdsByTemporaryId.set(temporaryId, entry);
-      const pendingEvents = temporaryId ? (pendingEventsByTemporaryId.get(temporaryId)?.events ?? []) : [];
-      if (temporaryId) pendingEventsByTemporaryId.delete(temporaryId);
+      if (key) canonicalEntriesByCorrelationKey.set(key, entry);
+      const pendingEvents = key ? (pendingEventsByCorrelationKey.get(key)?.events ?? []) : [];
+      if (key) pendingEventsByCorrelationKey.delete(key);
       return [...pendingEvents, event].map((pendingEvent) => rewriteEvent(asRecord(pendingEvent), entry));
     },
     drain(ctx) {
       const flushedEvents: unknown[] = [];
-      for (const [temporaryId, pending] of [...pendingEventsByTemporaryId.entries()]) {
+      for (const [key, pending] of [...pendingEventsByCorrelationKey.entries()]) {
         const entry = pending.events
           .map((pendingEvent) => resolveCanonicalEntry(asRecord(pendingEvent), ctx.sessionManager.getEntries()))
           .find((candidate) => candidate !== undefined);
         if (!entry) {
           pending.drainAttempts += 1;
-          if (pending.drainAttempts >= maxDrainAttempts) pendingEventsByTemporaryId.delete(temporaryId);
+          if (pending.drainAttempts >= maxDrainAttempts) pendingEventsByCorrelationKey.delete(key);
           continue;
         }
-        canonicalIdsByTemporaryId.set(temporaryId, entry);
-        pendingEventsByTemporaryId.delete(temporaryId);
+        canonicalEntriesByCorrelationKey.set(key, entry);
+        pendingEventsByCorrelationKey.delete(key);
         flushedEvents.push(...pending.events.map((pendingEvent) => rewriteEvent(asRecord(pendingEvent), entry)));
       }
       return flushedEvents;
     },
     hasPending() {
-      return pendingEventsByTemporaryId.size > 0;
+      return pendingEventsByCorrelationKey.size > 0;
     },
     reset() {
-      canonicalIdsByTemporaryId.clear();
-      pendingEventsByTemporaryId.clear();
+      canonicalEntriesByCorrelationKey.clear();
+      pendingEventsByCorrelationKey.clear();
     },
   };
 }
 
 function resolveCanonicalEntry(record: Record<string, unknown>, entries: unknown[]): CanonicalEntry | undefined {
-  const message = asRecord(record.message);
-  const temporaryId = messageId(record);
-  const sessionEntries = entries.flatMap((entry): Array<{ id: string; timestamp?: string; message: unknown }> => {
+  const eventMessage = asRecord(record.message);
+  const eventMessageId = messageId(record);
+  const eventRoleTimestampKey = roleTimestampKey(eventMessage);
+  const sessionEntries = entries.flatMap((entry): Array<{ id: string; timestamp?: string; roleTimestampKey?: string }> => {
     const entryRecord = asRecord(entry);
     if (entryRecord.type !== "message") return [];
     const id = readString(entryRecord.id);
     if (!id) return [];
-    return [{ id, timestamp: readString(entryRecord.timestamp), message: entryRecord.message }];
+    return [{ id, timestamp: readString(entryRecord.timestamp), roleTimestampKey: roleTimestampKey(asRecord(entryRecord.message)) }];
   });
-  const entryWithSameId = sessionEntries.find((entry) => entry.id === temporaryId);
+  const entryWithSameId = sessionEntries.find((entry) => entry.id === eventMessageId);
   if (entryWithSameId) return { id: entryWithSameId.id, timestamp: entryWithSameId.timestamp };
-  const candidates = sessionEntries.filter((entry) => messagesMatch(entry.message, message));
+  if (!eventRoleTimestampKey) return undefined;
+  const candidates = sessionEntries.filter((entry) => entry.roleTimestampKey === eventRoleTimestampKey);
   return candidates.length === 1 ? { id: candidates[0]!.id, timestamp: candidates[0]!.timestamp } : undefined;
 }
 
@@ -93,12 +95,17 @@ function rewriteEvent(record: Record<string, unknown>, entry: CanonicalEntry): u
   };
 }
 
-function messagesMatch(left: unknown, right: unknown): boolean {
-  const leftRecord = asRecord(left);
-  const rightRecord = asRecord(right);
-  if (leftRecord.role !== rightRecord.role) return false;
-  if (leftRecord.timestamp !== undefined && rightRecord.timestamp !== undefined) return leftRecord.timestamp === rightRecord.timestamp;
-  return JSON.stringify(leftRecord.content) === JSON.stringify(rightRecord.content);
+function correlationKey(record: Record<string, unknown>): string | undefined {
+  const id = messageId(record);
+  if (id) return `id:${id}`;
+  const key = roleTimestampKey(asRecord(record.message));
+  return key ? `role-timestamp:${key}` : undefined;
+}
+
+function roleTimestampKey(message: Record<string, unknown>): string | undefined {
+  const role = readString(message.role);
+  if (!role || message.timestamp === undefined) return undefined;
+  return `${role}:${String(message.timestamp)}`;
 }
 
 function messageId(record: Record<string, unknown>): string | undefined {

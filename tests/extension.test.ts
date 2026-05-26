@@ -550,7 +550,7 @@ describe("remote control extension", () => {
     remoteControlExtension(pi as never);
     await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-    handlers.get("message_end")?.({ type: "message_end", id: "tmp_user_1", timestamp: 1778284800000, message: { id: "tmp_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } }, ctx);
+    handlers.get("message_end")?.({ type: "message_end", message: { role: "user", timestamp: 1778284800000, content: "sent from iOS" } }, ctx);
     await vi.advanceTimersByTimeAsync(50);
     expect(fetchCalls).toHaveLength(1);
 
@@ -612,17 +612,17 @@ describe("remote control extension", () => {
       }),
     );
     ctx.sessionManager.getEntries = () => [
-      { type: "message", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } },
+      { type: "message", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } },
     ];
     remoteControlExtension(pi as never);
     await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-    handlers.get("message_start")?.({ type: "message_start", id: "tmp_1", message: { id: "tmp_1", role: "assistant", content: [{ type: "text", text: "hello" }] } }, ctx);
+    handlers.get("message_start")?.({ type: "message_start", message: { role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } }, ctx);
     await vi.waitFor(() => expect(fetchCalls.at(-1)).toMatchObject({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" }));
 
     expect(fetchCalls.at(-1)).toEqual({
       url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-      init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", content: [{ type: "text", text: "hello" }] } } },
+      init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
     });
   });
 

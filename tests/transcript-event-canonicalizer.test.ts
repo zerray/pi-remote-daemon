@@ -6,6 +6,48 @@ function ctx(entries: unknown[]) {
 }
 
 describe("transcript event canonicalizer", () => {
+  it("drains id-less message events by role and message timestamp", () => {
+    const entries: unknown[] = [];
+    const canonicalizer = createTranscriptEventCanonicalizer();
+
+    expect(canonicalizer.canonicalize({
+      type: "message_end",
+      message: { role: "user", timestamp: 1779774200513, content: [{ type: "text", text: "你好" }] },
+    }, ctx(entries))).toEqual([]);
+    expect(canonicalizer.hasPending()).toBe(true);
+
+    entries.push({
+      type: "message",
+      id: "14eb1111",
+      timestamp: "2026-05-26T05:43:20.516Z",
+      message: { role: "user", timestamp: 1779774200513, content: [{ type: "text", text: "你好" }] },
+    });
+
+    expect(canonicalizer.drain(ctx(entries))).toEqual([{
+      type: "message_end",
+      id: "14eb1111",
+      timestamp: "2026-05-26T05:43:20.516Z",
+      message: { id: "14eb1111", role: "user", timestamp: 1779774200513, content: [{ type: "text", text: "你好" }] },
+    }]);
+    expect(canonicalizer.hasPending()).toBe(false);
+  });
+
+  it("does not match id-less events by content when message timestamps are absent", () => {
+    const canonicalizer = createTranscriptEventCanonicalizer();
+    const entries = [{
+      type: "message",
+      id: "entry_1",
+      timestamp: "2026-05-09T00:00:00.000Z",
+      message: { role: "assistant", content: [{ type: "text", text: "same content" }] },
+    }];
+
+    expect(canonicalizer.canonicalize({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "same content" }] },
+    }, ctx(entries))).toEqual([]);
+    expect(canonicalizer.hasPending()).toBe(false);
+  });
+
   it("uses an existing session entry id even when streaming content is partial", () => {
     const canonicalizer = createTranscriptEventCanonicalizer();
     const entries = [{
