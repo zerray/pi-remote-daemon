@@ -510,6 +510,29 @@ describe("remote control extension", () => {
     })));
   });
 
+  it("forwards TUI session-name changes while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("session_info_changed")?.({ type: "session_info_changed", name: "Manual TUI Name" }, ctx);
+    await vi.waitFor(() => expect(fetchCalls.at(-1)).toMatchObject({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" }));
+
+    expect(fetchCalls.at(-1)).toEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: { method: "POST", body: { type: "session_name", name: "Manual TUI Name" } },
+    });
+  });
+
   it("forwards TUI events while remote control is active", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();

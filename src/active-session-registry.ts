@@ -47,10 +47,19 @@ export type ActiveSessionState = TranscriptPage & {
   runtimeStatus: RuntimeStatus | null;
 };
 
+export type ActiveSessionNameGenerator = (request: {
+  sessionId: string;
+  project: ActiveProject;
+  sessionFile: string;
+  messages: ReturnType<typeof readSessionTranscriptMessages>;
+  runtimeStatus?: RuntimeStatus;
+}) => Promise<string | null | undefined>;
+
 export type ActiveSessionRegistry = {
   registerSession(session: ActiveSessionRegistration): ActiveSessionSummary;
   unregisterSession(sessionId: string): boolean;
   touchSession(sessionId: string): boolean;
+  updateSessionName(sessionId: string, name: string | null | undefined): boolean;
   pruneInactiveSessions(): string[];
   listProjects(): ActiveProject[];
   listProjectSessions(projectId: string): ActiveSessionSummary[];
@@ -65,6 +74,7 @@ export type ActiveSessionRegistryOptions = {
   now?: () => number;
   staleSessionTimeoutMs?: number;
   isProcessRunning?: (pid: number) => boolean;
+  nameGenerator?: ActiveSessionNameGenerator;
 };
 
 export const DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS = 5_000;
@@ -82,6 +92,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
   const now = options.now ?? Date.now;
   const staleSessionTimeoutMs = options.staleSessionTimeoutMs ?? DEFAULT_ACTIVE_SESSION_STALE_TIMEOUT_MS;
   const isProcessRunning = options.isProcessRunning;
+  const nameGenerator = options.nameGenerator;
 
   const pruneInactiveSessions = (): string[] => {
     const cutoff = now() - staleSessionTimeoutMs;
@@ -106,6 +117,20 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
         commands: [],
         lastSeenAtMs: now(),
       });
+      if (!summary.name && nameGenerator) {
+        const messages = readSessionTranscriptMessages(session.sessionFile);
+        void nameGenerator({
+          sessionId: session.id,
+          project: session.project,
+          sessionFile: session.sessionFile,
+          messages,
+          runtimeStatus: session.runtimeStatus,
+        }).then((generatedName) => {
+          const stored = sessions.get(session.id);
+          const trimmed = typeof generatedName === "string" ? generatedName.trim() : "";
+          if (stored && trimmed && !stored.summary.name) stored.summary.name = trimmed;
+        }).catch(() => undefined);
+      }
       return summary;
     },
 
@@ -118,6 +143,15 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       const session = sessions.get(sessionId);
       if (!session) return false;
       session.lastSeenAtMs = now();
+      return true;
+    },
+
+    updateSessionName(sessionId, name) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      const trimmed = typeof name === "string" ? name.trim() : "";
+      if (trimmed) session.summary.name = trimmed;
       return true;
     },
 
@@ -205,12 +239,17 @@ function sessionFileExists(session: Pick<ActiveSessionRegistration, "sessionFile
   return session.sessionFile.length > 0 && existsSync(session.sessionFile);
 }
 
+function publicSessionName(name: string | undefined): string | null {
+  const trimmed = name?.trim();
+  return trimmed ? trimmed : null;
+}
+
 function toSummary(session: ActiveSessionRegistration): ActiveSessionSummary {
   return {
     id: session.id,
     piSessionId: session.piSessionId,
     projectId: session.project.id,
-    name: session.name ?? null,
+    name: publicSessionName(session.name),
     path: session.sessionFile,
     updatedAt: session.updatedAt,
     messageCount: session.messageCount,

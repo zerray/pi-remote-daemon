@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createActiveSessionRegistry } from "../src/active-session-registry.js";
 
 const runtimeStatus = {
@@ -172,6 +172,79 @@ describe("active TUI session registry", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("generates ephemeral names for unnamed active sessions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-generated-name-"));
+    const sessionFile = join(root, "session.jsonl");
+    const generator = vi.fn(async () => "Debug login failure");
+    const registry = createActiveSessionRegistry({ nameGenerator: generator });
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "The login button fails on iOS" } }),
+        JSON.stringify({ type: "message", id: "msg_2", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "I'll inspect the auth flow." }] } }),
+      ].join("\n"));
+
+      registry.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 0,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      });
+
+      await vi.waitFor(() => expect(registry.listProjectSessions("proj_1")[0]?.name).toBe("Debug login failure"));
+      expect(generator).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: "sess_1",
+        sessionFile,
+        messages: [
+          expect.objectContaining({ id: "msg_1", text: "The login button fails on iOS" }),
+          expect.objectContaining({ id: "msg_2", text: "I'll inspect the auth flow." }),
+        ],
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats blank TUI names as unnamed for generated names", async () => {
+    const generator = vi.fn(async () => "Generated blank-name title");
+    const registry = createActiveSessionRegistry({ nameGenerator: generator });
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      name: "   ",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await vi.waitFor(() => expect(registry.listProjectSessions("proj_1")[0]?.name).toBe("Generated blank-name title"));
+  });
+
+  it("updates active session names from TUI session metadata", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.updateSessionName("sess_1", "Refactor auth module")).toBe(true);
+    expect(registry.listProjectSessions("proj_1")[0]?.name).toBe("Refactor auth module");
+    expect(registry.getSessionState("sess_1")?.session.name).toBe("Refactor auth module");
+    expect(registry.updateSessionName("missing", "Other")).toBe(false);
   });
 
   it("stores and updates runtime status snapshots for active sessions", () => {

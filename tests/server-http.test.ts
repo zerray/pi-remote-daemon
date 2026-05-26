@@ -263,6 +263,38 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("stores TUI session-name events for session API responses", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "session_name", name: "Manual TUI Name" }),
+        });
+        expect(response.status).toBe(200);
+
+        const sessionsResponse = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        expect(sessionsResponse.status).toBe(200);
+        await expect(sessionsResponse.json()).resolves.toMatchObject({ sessions: [{ id: "sess_1", name: "Manual TUI Name" }] });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("broadcasts remote compact results to iOS WebSocket subscribers", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({

@@ -18,7 +18,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) {
-      void postTuiEvent(sessionId, enrichTuiEventForDaemon(event, ctx));
+      void postTuiEvent(sessionId, sessionNameEventForDaemon(event) ?? enrichTuiEventForDaemon(event, ctx));
       void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
     }
   };
@@ -106,6 +106,7 @@ function registerEventForwarders(
 ): void {
   pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
   pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
+  pi.on("session_info_changed" as never, forward as never);
   pi.on("turn_start", forward);
   pi.on("turn_end", forward);
   pi.on("message_start", forward);
@@ -116,6 +117,11 @@ function registerEventForwarders(
   pi.on("tool_execution_end", forward);
   pi.on("agent_start", forward);
   pi.on("agent_end", forward);
+}
+
+function sessionNameEventForDaemon(event: unknown): unknown | undefined {
+  const name = readString(asRecord(event).name);
+  return name ? { type: "session_name", name } : undefined;
 }
 
 export function enrichTuiEventForDaemon(event: unknown, ctx: Pick<ExtensionContext, "sessionManager">): unknown {

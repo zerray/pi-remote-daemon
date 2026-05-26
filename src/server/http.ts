@@ -231,6 +231,11 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isSessionNameEvent(event)) {
+      options.activeSessions?.updateSessionName(sessionId, event.name);
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     const normalizedEvents = normalizeTuiEvent(event);
     streamHub.get(sessionId)?.forEach((webSocket) => normalizedEvents.forEach((normalizedEvent) => sendWebSocketJson(webSocket, normalizedEvent)));
     writeJson(response, 200, { accepted: true });
@@ -466,6 +471,10 @@ function isLoopbackRemoteAddress(address: string | undefined): boolean {
 
 function isRuntimeStatusEvent(event: unknown): event is { type: "runtime_status"; status: RuntimeStatus } {
   return Boolean(event && typeof event === "object" && (event as { type?: unknown }).type === "runtime_status" && (event as { status?: unknown }).status && typeof (event as { status?: unknown }).status === "object");
+}
+
+function isSessionNameEvent(event: unknown): event is { type: "session_name"; name: string } {
+  return Boolean(event && typeof event === "object" && (event as { type?: unknown }).type === "session_name" && typeof (event as { name?: unknown }).name === "string");
 }
 
 function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {

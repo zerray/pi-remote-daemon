@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { main, readInstalledPiVersion, type CliDependencies } from "../src/cli.js";
 
 describe("daemon CLI", () => {
@@ -140,6 +140,44 @@ describe("daemon CLI", () => {
     expect(code).toBe(1);
     expect(calls).toEqual([{ acquireLock: "/tmp/state" }]);
     expect(lines).toEqual(["pi-remote-control is already running"]);
+  });
+
+  it("starts with a daemon-side session name generator", async () => {
+    let startOptions: Parameters<NonNullable<CliDependencies["startServer"]>>[0] | undefined;
+    const generator = vi.fn(async () => "Generated title");
+    const code = await main(["start"], {
+      getStateDir: () => "/tmp/state",
+      ensureStateDir: async () => undefined,
+      loadConfig: async () => ({ bindAddress: "127.0.0.1:0" }),
+      saveConfig: async () => undefined,
+      acquireLock: async () => ({ path: "/tmp/state/daemon.lock", release: async () => undefined }),
+      openStore: () => ({
+        close: () => undefined,
+        authenticateToken: async () => false,
+        createPairingCode: async () => ({ pairCode: "123456", expiresAt: "2026-05-09T00:01:00.000Z" }),
+        claimPairingCode: async () => undefined,
+      }),
+      createSessionNameGenerator: () => generator,
+      startServer: async (options) => {
+        startOptions = options;
+        return { address: "127.0.0.1:9999", close: async () => undefined };
+      },
+      waitForShutdown: async () => undefined,
+      writeLine: () => undefined,
+    });
+
+    expect(code).toBe(0);
+    startOptions?.activeSessions?.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: process.pid,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    await vi.waitFor(() => expect(startOptions?.activeSessions?.listProjectSessions("proj_1")[0]?.name).toBe("Generated title"));
   });
 
   it("starts with persistent store authentication and pairing", async () => {

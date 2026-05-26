@@ -2,7 +2,7 @@
 import { readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createActiveSessionRegistry } from "./active-session-registry.js";
+import { createActiveSessionRegistry, type ActiveSessionNameGenerator } from "./active-session-registry.js";
 import { defaultDaemonConfig, loadDaemonConfig, saveDaemonConfig } from "./config.js";
 import { acquireDaemonLock, type DaemonLock } from "./lock.js";
 import type { DaemonStore } from "./persistence/daemon-store.js";
@@ -10,6 +10,7 @@ import { ensureDaemonStateDir, getDaemonStateDir } from "./paths.js";
 import { buildPairingLink } from "./pairing-link.js";
 import { formatPairingDisplay } from "./qr.js";
 import { startDaemonServer, type DaemonServer, type StartServerOptions } from "./server/http.js";
+import { createLlmSessionNameGenerator } from "./session-name-generator.js";
 import type { DaemonConfig } from "./types.js";
 
 export type CliDependencies = {
@@ -24,6 +25,7 @@ export type CliDependencies = {
   readTextFile?: (path: string) => Promise<string>;
   removeFile?: (path: string) => Promise<void>;
   isProcessRunning?: (pid: number) => boolean;
+  createSessionNameGenerator?: () => ActiveSessionNameGenerator;
   sendSignal?: (pid: number, signal: NodeJS.Signals) => void;
   getPiVersion?: () => string | Promise<string>;
   writeLine?: (line: string) => void;
@@ -69,7 +71,7 @@ export async function main(argv = process.argv.slice(2), deps: CliDependencies =
     config,
     piVersion,
     authenticateToken: devToken ? (token) => token === devToken || store.authenticateToken(token) : (token) => store.authenticateToken(token),
-    activeSessions: createActiveSessionRegistry({ isProcessRunning }),
+    activeSessions: createActiveSessionRegistry({ isProcessRunning, nameGenerator: (deps.createSessionNameGenerator ?? createLlmSessionNameGenerator)() }),
     pairService: {
       createPairingCode: () => store.createPairingCode(new Date(), 5 * 60_000),
       claimPairingCode: async (request) => {
