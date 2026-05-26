@@ -89,6 +89,8 @@ Response:
 }
 ```
 
+`name` is the effective display name. If the Pi TUI reports a nonblank session name, that TUI name is returned. If the TUI name is blank or absent, the daemon may return a short LLM-generated name stored only in active daemon process state. If no TUI or generated name is available, `name` is `null`. A later nonblank TUI name replaces any generated name.
+
 `messageCount` is the daemon-computed count of top-level `user` and `assistant` transcript messages derived from the session file. Assistant messages whose `stopReason` is `"toolUse"` are included, because the app can show tool-call activity and details. Assistant thinking and tool-use blocks are content within an assistant message and do not increment the count separately. Top-level `toolResult`, `system`, internal tool execution, lifecycle, and other non-message records are excluded.
 
 `POST /v1/projects/{projectId}/sessions` returns `405 method_not_allowed`. New sessions are created in the Pi TUI, then made visible by running `/remote-control`.
@@ -408,7 +410,7 @@ Response payload:
 
 ### Session registration
 
-When `/remote-control` enables a session, the extension registers the current TUI session. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed transcript message counts from `sessionFile` when available:
+When `/remote-control` enables a session, the extension registers the current TUI session. The registration `name` is the current Pi TUI session name, if one has been explicitly set. A blank or absent `name` lets the daemon generate an ephemeral API display name. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed transcript message counts from `sessionFile` when available:
 
 ```json
 {
@@ -443,7 +445,7 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 While active, the extension forwards Pi extension events and runtime-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. The daemon normalizes them before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. TUI session-name updates are posted as `{ "type": "session_name", "name": "Refactor auth module" }`; a nonblank name replaces any daemon-generated active-session name. Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably.
 
 ### Daemon-to-TUI commands
 

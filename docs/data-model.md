@@ -131,6 +131,7 @@ type ActiveTuiSession = {
   projectId: string;
   sessionFile: string;
   name?: string;
+  nameSource?: "tui" | "generated";
   pid: number;
   messageCount: number;
   isStreaming: boolean;
@@ -140,7 +141,11 @@ type ActiveTuiSession = {
 };
 ```
 
-An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `runtimeStatus` is the latest structured runtime-status snapshot reported by the owning TUI extension. Public `messageCount` values are daemon-computed counts of top-level `user` and `assistant` transcript messages. Assistant messages whose `stopReason` is `"toolUse"` are included because they represent visible tool-call activity in the app. Thinking and tool-use blocks count as part of their containing assistant message, not as separate messages; top-level `toolResult`, `system`, tool execution, lifecycle, and other non-message records are excluded.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `runtimeStatus` is the latest structured runtime-status snapshot reported by the owning TUI extension.
+
+`name` is the effective public display name for API responses. `nameSource` is `"tui"` when Pi session metadata supplied a nonblank name and `"generated"` when the daemon generated an ephemeral name for an otherwise unnamed session. Generated names live only in active-session process state and are discarded with that state. A later nonblank TUI name replaces the generated name.
+
+Public `messageCount` values are daemon-computed counts of top-level `user` and `assistant` transcript messages. Assistant messages whose `stopReason` is `"toolUse"` are included because they represent visible tool-call activity in the app. Thinking and tool-use blocks count as part of their containing assistant message, not as separate messages; top-level `toolResult`, `system`, tool execution, lifecycle, and other non-message records are excluded.
 
 ## Runtime status
 
