@@ -47,13 +47,45 @@ export function olderTranscriptPage(messages: TranscriptMessage[], beforeCursor:
 
 function pageFromCandidates(candidates: TranscriptMessage[], limit: number): TranscriptPage {
   const start = Math.max(0, candidates.length - limit);
-  const pageMessages = candidates.slice(start);
+  const primaryMessages = candidates.slice(start);
   const hasOlderMessages = start > 0;
   return {
-    messages: pageMessages,
-    olderMessagesCursor: hasOlderMessages && pageMessages[0] ? encodeTranscriptCursor(pageMessages[0].createdAt) : null,
+    messages: withToolCallParents(primaryMessages, candidates),
+    olderMessagesCursor: hasOlderMessages && primaryMessages[0] ? encodeTranscriptCursor(primaryMessages[0].createdAt) : null,
     hasOlderMessages,
   };
+}
+
+function withToolCallParents(primaryMessages: TranscriptMessage[], allMessages: TranscriptMessage[]): TranscriptMessage[] {
+  const primaryIds = new Set(primaryMessages.map((message) => message.id));
+  const includedToolCallIds = toolCallIds(primaryMessages);
+  const parents: TranscriptMessage[] = [];
+
+  for (const result of primaryMessages) {
+    if (result.role !== "toolResult" || !result.toolCallId || includedToolCallIds.has(result.toolCallId)) continue;
+    const parent = findToolCallParent(result.toolCallId, result.createdAt, allMessages);
+    if (!parent || primaryIds.has(parent.id) || parents.some((message) => message.id === parent.id)) continue;
+    parents.push(parent);
+    for (const id of toolCallIds([parent])) includedToolCallIds.add(id);
+  }
+
+  return normalizeMessages([...parents, ...primaryMessages]);
+}
+
+function findToolCallParent(toolCallId: string, resultCreatedAt: string, messages: TranscriptMessage[]): TranscriptMessage | undefined {
+  return [...messages]
+    .reverse()
+    .find((message) => message.createdAt <= resultCreatedAt && toolCallIds([message]).has(toolCallId));
+}
+
+function toolCallIds(messages: TranscriptMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === "toolCall") ids.add(block.id);
+    }
+  }
+  return ids;
 }
 
 function normalizeMessages(messages: TranscriptMessage[]): TranscriptMessage[] {

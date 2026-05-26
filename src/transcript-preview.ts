@@ -1,3 +1,4 @@
+import { recentTranscriptWindow } from "./transcript-pagination.js";
 import type { TranscriptContentBlock, TranscriptMessage } from "./types.js";
 
 export const INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT = 20;
@@ -11,11 +12,11 @@ type SessionStateWithMessages = {
 export function previewInitialSessionState<T>(state: T): T {
   if (!isRecord(state) || !Array.isArray((state as SessionStateWithMessages).messages)) return state;
   const messages = (state as SessionStateWithMessages).messages ?? [];
-  const start = Math.max(0, messages.length - INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT);
+  const page = recentTranscriptWindow(messages, INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT);
   return {
     ...state,
-    messages: messages.slice(start).map(previewTranscriptMessage),
-    hasOlderMessages: (state as SessionStateWithMessages).hasOlderMessages || start > 0,
+    messages: page.messages.map(previewTranscriptMessage),
+    hasOlderMessages: (state as SessionStateWithMessages).hasOlderMessages || page.hasOlderMessages,
   };
 }
 

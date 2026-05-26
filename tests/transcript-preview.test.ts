@@ -22,6 +22,33 @@ describe("initial WebSocket session state preview", () => {
     );
   });
 
+  it("keeps tool-call parent context when trimming initial state", () => {
+    const toolCallParent: TranscriptMessage = {
+      id: "call_parent",
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
+      text: "",
+      createdAt: "2026-05-09T00:00:01.000Z",
+      isStreaming: false,
+    };
+    const result: TranscriptMessage = {
+      id: "result",
+      role: "toolResult",
+      content: [{ type: "text", text: "ok" }],
+      text: "ok",
+      createdAt: "2026-05-09T00:00:24.000Z",
+      toolCallId: "call_1",
+      toolName: "bash",
+      isStreaming: false,
+    };
+    const state = { messages: [toolCallParent, ...Array.from({ length: 22 }, (_, index) => message(String(index + 2))), result, message("25")] };
+
+    const preview = previewInitialSessionState(state);
+
+    expect(preview.messages.map((item) => item.id)).toContain("call_parent");
+    expect(preview.messages.at(-2)?.id).toBe("result");
+  });
+
   it("truncates oversized transcript message strings to the first 10 KiB", () => {
     const oversized = "a".repeat(INITIAL_WEBSOCKET_STRING_PREVIEW_BYTES + 5);
     const state = { messages: [{ ...message("1", oversized), content: [{ type: "text", text: oversized }, { type: "thinking", thinking: oversized }] }] };

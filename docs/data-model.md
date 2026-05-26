@@ -199,7 +199,7 @@ type SessionSnapshot = {
 };
 ```
 
-The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time and normalized into `TranscriptMessage` values. The snapshot includes the latest TUI-reported `RuntimeStatus` when available. Older transcript history is loaded through explicit transcript page requests.
+The daemon returns a bounded recent-message snapshot for active sessions so newly connected iOS clients can render persisted state before incremental events arrive. Snapshot messages are derived from the session's Pi JSONL `sessionFile` at request time and normalized into `TranscriptMessage` values. If the bounded primary window includes a `toolResult`, older assistant messages that declare matching `toolCall` IDs are prepended as dependency context when available. The snapshot includes the latest TUI-reported `RuntimeStatus` when available. Older transcript history is loaded through explicit transcript page requests.
 
 ## Transcript message
 
@@ -237,7 +237,7 @@ type TranscriptPage = {
 };
 ```
 
-Transcript pages contain bounded message windows ordered oldest-to-newest by `createdAt` and are derived from the session's Pi JSONL `sessionFile` at request time. Cursor values are generated from the oldest loaded message's `createdAt` timestamp, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `TranscriptMessage.id`.
+Transcript pages contain bounded primary message windows ordered oldest-to-newest by `createdAt` and are derived from the session's Pi JSONL `sessionFile` at request time. If the primary window includes `toolResult` messages, older assistant messages with matching `toolCall` IDs may be prepended as dependency context, so `messages.length` can exceed the requested page limit. Cursor values are generated from the primary page boundary, not from prepended dependency context, are daemon-encoded, and are opaque to clients. Clients merge pages and live updates by de-duplicating `TranscriptMessage.id`.
 
 ## Transcript stream event
 
@@ -268,7 +268,7 @@ type RemoteCompactResultEvent =
   | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed runtime-status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. `remote_compact_result` reports the asynchronous outcome of a remote compact request and is correlated by `requestId`; it is not stored in daemon durable state. The initial `session_state` stream event is limited to at most 20 recent messages; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events and TUI-computed runtime-status snapshots but do not expose raw Pi event payloads. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. `remote_compact_result` reports the asynchronous outcome of a remote compact request and is correlated by `requestId`; it is not stored in daemon durable state. The initial `session_state` stream event is limited to a primary window of at most 20 recent messages plus any older assistant tool-call parents required by included tool results; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
 
 ## TUI control channel
 
