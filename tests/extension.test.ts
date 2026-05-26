@@ -533,9 +533,11 @@ describe("remote control extension", () => {
     });
   });
 
-  it("forwards TUI events while remote control is active", async () => {
+  it("does not forward temporary transcript ids and flushes with canonical session entry ids", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
+    const entries: unknown[] = [];
+    ctx.sessionManager.getEntries = () => entries;
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -547,12 +549,49 @@ describe("remote control extension", () => {
     remoteControlExtension(pi as never);
     await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
 
-    handlers.get("message_start")?.({ type: "message_start", message: { id: "msg_1", role: "user" } }, ctx);
+    handlers.get("message_start")?.({ type: "message_start", id: "tmp_1", timestamp: 1778284800000, message: { id: "tmp_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchCalls).toHaveLength(1);
+
+    entries.push({ type: "message", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } });
+    handlers.get("message_end")?.({ type: "message_end", id: "tmp_1", timestamp: 1778284800000, message: { id: "tmp_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } }, ctx);
+    await vi.waitFor(() => expect(fetchCalls).toHaveLength(3));
+
+    expect(fetchCalls.slice(1)).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
+      },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "message_end", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
+      },
+    ]);
+  });
+
+  it("forwards TUI events while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    ctx.sessionManager.getEntries = () => [
+      { type: "message", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } },
+    ];
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("message_start")?.({ type: "message_start", id: "tmp_1", message: { id: "tmp_1", role: "assistant", content: [{ type: "text", text: "hello" }] } }, ctx);
     await vi.waitFor(() => expect(fetchCalls.at(-1)).toMatchObject({ url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" }));
 
     expect(fetchCalls.at(-1)).toEqual({
       url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-      init: { method: "POST", body: { type: "message_start", message: { id: "msg_1", role: "user" } } },
+      init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", content: [{ type: "text", text: "hello" }] } } },
     });
   });
 

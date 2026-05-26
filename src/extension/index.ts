@@ -8,6 +8,7 @@ import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
 import { projectIdForPath } from "../session-index.js";
+import { createTranscriptEventCanonicalizer } from "./transcript-event-canonicalizer.js";
 
 export { collectRuntimeStatus } from "../runtime-status.js";
 
@@ -15,16 +16,23 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const activeSessionIds = new Set<string>();
   const pollTimers = new Map<string, NodeJS.Timeout>();
   const runtimeStatusCache = new Map<string, string>();
+  const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) {
-      void postTuiEvent(sessionId, sessionNameEventForDaemon(event) ?? enrichTuiEventForDaemon(event, ctx));
+      const canonicalizer = transcriptEventCanonicalizers.get(sessionId) ?? createTranscriptEventCanonicalizer();
+      transcriptEventCanonicalizers.set(sessionId, canonicalizer);
+      const sessionNameEvent = sessionNameEventForDaemon(event);
+      const events = sessionNameEvent ? [sessionNameEvent] : canonicalizer.canonicalize(event, ctx);
+      events.forEach((daemonEvent) => void postTuiEvent(sessionId, daemonEvent));
       void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
     }
   };
   const resetLocalState = (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     runtimeStatusCache.delete(sessionId);
+    transcriptEventCanonicalizers.get(sessionId)?.reset();
+    transcriptEventCanonicalizers.delete(sessionId);
     deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
   const cleanup = async (ctx: ExtensionContext) => {
@@ -53,6 +61,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
           return;
         }
         runtimeStatusCache.delete(sessionId);
+        transcriptEventCanonicalizers.get(sessionId)?.reset();
+        transcriptEventCanonicalizers.delete(sessionId);
         deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
         ctx.ui.notify("Remote control disabled for this session", "info");
         return;
