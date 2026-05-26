@@ -66,6 +66,7 @@ export type ActiveSessionRegistry = {
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
   updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
+  updateSessionActivity(sessionId: string, activity: { isStreaming: boolean; pendingMessageCount?: number }): boolean;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
   takeCommands(sessionId: string): RemoteTuiCommand[];
 };
@@ -205,6 +206,17 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       if (JSON.stringify(session.runtimeStatus ?? null) === JSON.stringify(status)) return false;
       session.runtimeStatus = status;
       return true;
+    },
+
+    updateSessionActivity(sessionId, activity) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      const nextPendingMessageCount = activity.pendingMessageCount ?? session.pendingMessageCount;
+      const changed = session.isStreaming !== activity.isStreaming || session.pendingMessageCount !== nextPendingMessageCount;
+      session.isStreaming = activity.isStreaming;
+      session.pendingMessageCount = nextPendingMessageCount;
+      return changed;
     },
 
     enqueueCommand(sessionId, command) {

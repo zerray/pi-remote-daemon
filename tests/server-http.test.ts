@@ -263,6 +263,60 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("updates and broadcasts active-session streaming state from agent lifecycle events", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.objectContaining({ isStreaming: false }) })));
+
+        const startResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "agent_start" }),
+        });
+        expect(startResponse.status).toBe(200);
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.objectContaining({ isStreaming: true }) })));
+
+        const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        expect(snapshotResponse.status).toBe(200);
+        await expect(snapshotResponse.json()).resolves.toMatchObject({ isStreaming: true });
+
+        const endResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "agent_end" }),
+        });
+        expect(endResponse.status).toBe(200);
+        await vi.waitFor(() => {
+          const sessionStates = messages.filter((message) => typeof message === "object" && message !== null && (message as { type?: unknown }).type === "session_state");
+          expect(sessionStates.at(-1)).toMatchObject({ type: "session_state", state: { isStreaming: false } });
+        });
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("stores TUI session-name events for session API responses", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({

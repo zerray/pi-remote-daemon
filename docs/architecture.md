@@ -43,7 +43,7 @@ The extension responsibilities are session-aware:
 - When `/remote-control` enables a session, open a control channel to the daemon, register current session metadata, and keep the registration fresh with heartbeats.
 - When a locally active session heartbeat finds that the daemon no longer has the registration, re-register the current TUI session; if re-registration fails, clear local active state and notify the user.
 - When `/remote-control` disables a session or the TUI session shuts down, unregister it; if shutdown cleanup is missed, the daemon expires the registration after the TUI PID exits or heartbeats stop.
-- Forward Pi turn, message, assistant streaming, tool execution, queue, status, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization. Message lifecycle events are forwarded only after their public IDs have been canonicalized to Pi session-entry IDs, with unresolved events buffered by temporary message ID or exact `message.role + message.timestamp`.
+- Forward Pi turn, message, assistant streaming, tool execution, queue, status, and lifecycle events to the daemon while remote control is active. These TUI-to-daemon events are package-internal inputs for daemon normalization. Agent lifecycle events update daemon session-level `isStreaming` state. Message lifecycle events are forwarded only after their public IDs have been canonicalized to Pi session-entry IDs, with unresolved events buffered by temporary message ID or exact `message.role + message.timestamp`.
 - Compute structured runtime-status snapshots from the live TUI context and send them to the daemon when status inputs change.
 - Forward TUI session-name changes so explicit user names can override daemon-generated display names.
 - Receive daemon-forwarded prompt, abort, and compact commands and apply them to the current live TUI runtime through Pi extension APIs.
@@ -64,7 +64,7 @@ The daemon responsibilities are independent of Pi SDK session ownership:
 - Store the latest TUI-reported runtime-status snapshot for each active session and include it in session state sent to iOS.
 - Generate short ephemeral display names for unnamed active sessions with an LLM and expose them through session APIs until a TUI-provided name overrides them.
 - Serve bounded recent transcript snapshots and older transcript pages for active sessions by reading Pi session JSONL files and normalizing entries into public `TranscriptMessage` values.
-- Normalize live TUI Pi events into public transcript stream events for subscribed iOS WebSocket clients without using the stream for full historical transcript payloads.
+- Normalize live TUI Pi events into public transcript stream events for subscribed iOS WebSocket clients without using the stream for full historical transcript payloads, and broadcast bounded `session_state` refreshes when session-level working state changes.
 - Broadcast session updates to subscribed iOS WebSocket clients.
 
 The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abort sessions in the MVP.

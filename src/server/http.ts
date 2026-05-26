@@ -226,6 +226,12 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isAgentLifecycleEvent(event)) {
+      const changed = options.activeSessions?.updateSessionActivity(sessionId, { isStreaming: event.type === "agent_start" }) ?? false;
+      if (changed) broadcastSessionState(sessionId, options, streamHub);
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteCompactResultEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       writeJson(response, 200, { accepted: true });
@@ -477,6 +483,10 @@ function isSessionNameEvent(event: unknown): event is { type: "session_name"; na
   return Boolean(event && typeof event === "object" && (event as { type?: unknown }).type === "session_name" && typeof (event as { name?: unknown }).name === "string");
 }
 
+function isAgentLifecycleEvent(event: unknown): event is { type: "agent_start" | "agent_end" } {
+  return Boolean(event && typeof event === "object" && ((event as { type?: unknown }).type === "agent_start" || (event as { type?: unknown }).type === "agent_end"));
+}
+
 function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {
   if (!event || typeof event !== "object") return false;
   const record = event as Record<string, unknown>;
@@ -524,6 +534,12 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+function broadcastSessionState(sessionId: string, options: StartServerOptions, streamHub: StreamHub): void {
+  const activeState = options.activeSessions?.getSessionState(sessionId, { messageLimit: INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT });
+  if (!activeState) return;
+  streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "session_state", state: previewInitialSessionState(activeState) }));
 }
 
 function closeSessions(sessionIds: string[], streamHub: StreamHub): void {
