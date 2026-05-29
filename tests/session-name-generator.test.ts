@@ -43,6 +43,7 @@ describe("session name generation", () => {
     expect(complete).toHaveBeenCalledWith(model, expect.objectContaining({
       messages: [expect.objectContaining({ role: "user", content: expect.stringContaining("The login button fails on iOS") })],
     }), expect.objectContaining({ apiKey: "test-key", headers: { "x-test": "1" }, maxTokens: 32 }));
+    expect(complete.mock.calls[0]?.[2]).not.toHaveProperty("temperature");
   });
 
   it("builds a bounded naming prompt from visible conversation text", () => {

@@ -43,7 +43,6 @@ export function createLlmSessionNameGenerator(deps: LlmSessionNameGeneratorDepen
       apiKey: auth.apiKey,
       headers: auth.headers,
       maxTokens: 32,
-      temperature: 0,
       reasoning: "off",
     });
     return sanitizeGeneratedSessionName(response.content.flatMap((block) => block.type === "text" && block.text ? [block.text] : []).join(""));
