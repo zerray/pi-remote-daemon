@@ -3,7 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
-import type { RemoteCompactResultEvent } from "../types.js";
+import type { RemoteCompactResultEvent, RemoteTreeNavigationResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
@@ -386,7 +386,7 @@ function disconnectLocalSession(
 
 export function handleRemoteCommand(
   pi: Pick<ExtensionAPI, "sendUserMessage">,
-  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle" | "sessionManager">,
+  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle" | "navigateTree" | "sessionManager">,
   command: RemoteTuiCommand,
   sessionId?: string,
 ): void {
@@ -397,11 +397,46 @@ export function handleRemoteCommand(
   if (command.type === "remote_abort") ctx.abort();
   if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
   if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_tree_navigate") handleRemoteTreeNavigateCommand(ctx, command, sessionId);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
   if (streamingBehavior) return { deliverAs: streamingBehavior };
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
+}
+
+function handleRemoteTreeNavigateCommand(ctx: Pick<ExtensionCommandContext, "navigateTree" | "sessionManager">, command: Extract<RemoteTuiCommand, { type: "remote_tree_navigate" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  void (async () => {
+    try {
+      const result = await ctx.navigateTree(command.targetEntryId, { summarize: false });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        await postTuiEvent(sessionId, { type: "remote_tree_navigation_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteTreeNavigationResultEvent);
+        return;
+      }
+      const snapshot = treeSnapshotForContext({ sessionManager: ctx.sessionManager } as ExtensionCommandContext);
+      const snapshotRecord = asRecord(snapshot);
+      await postTuiEvent(sessionId, {
+        type: "remote_tree_navigation_result",
+        requestId: command.requestId,
+        ok: true,
+        leafId: readString(snapshotRecord.leafId) ?? null,
+        snapshotVersion: readString(snapshotRecord.snapshotVersion) ?? "",
+        branchVersion: readString(snapshotRecord.branchVersion) ?? "",
+        ...(typeof resultRecord.editorText === "string" ? { editorText: resultRecord.editorText } : {}),
+      } satisfies RemoteTreeNavigationResultEvent);
+    } catch (error) {
+      await postTuiEvent(sessionId, { type: "remote_tree_navigation_result", requestId: command.requestId, ok: false, error: navigationErrorCode(error) } satisfies RemoteTreeNavigationResultEvent);
+    }
+  })().catch(() => undefined);
+}
+
+function navigationErrorCode(error: unknown): Extract<RemoteTreeNavigationResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("not found")) return "target_not_found";
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "summarization_failed";
 }
 
 function handleRemoteTreeRefreshCommand(ctx: Pick<ExtensionCommandContext, "sessionManager">, requestId: string, sessionId: string | undefined): void {

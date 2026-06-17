@@ -40,7 +40,8 @@ export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
   | { type: "remote_abort"; requestId: string }
   | { type: "remote_compact"; requestId: string }
-  | { type: "remote_tree_refresh"; requestId: string };
+  | { type: "remote_tree_refresh"; requestId: string }
+  | { type: "remote_tree_navigate"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null; summaryMode: "none" };
 
 export type ActiveSessionState = TranscriptPage & {
   session: ActiveSessionSummary;

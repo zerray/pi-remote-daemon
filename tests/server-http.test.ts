@@ -419,6 +419,73 @@ describe("daemon HTTP server", () => {
     }
   });
 
+  it("broadcasts Remote Tree Navigation results and refreshed active-branch session state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-tree-nav-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "root_user", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "root" } }),
+        JSON.stringify({ type: "message", id: "old_assistant", parentId: "root_user", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "old" } }),
+        JSON.stringify({ type: "message", id: "active_user", parentId: "root_user", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "active" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 3,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:03.000Z",
+        treeSnapshot: {
+          sessionId: "sess_1",
+          leafId: "old_assistant",
+          snapshotVersion: "treev_1",
+          branchVersion: "branchv_1",
+          entries: [
+            { id: "root_user", parentId: null, type: "message", role: "user", title: "user", preview: "root", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "old_assistant", parentId: "root_user", type: "message", role: "assistant", title: "assistant", preview: "old", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "active_user", parentId: "root_user", type: "message", role: "user", title: "user", preview: "active", timestamp: "2026-05-09T00:00:03.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: true, navigationBehavior: "edit_prompt" },
+          ],
+          defaultFilter: "default",
+          filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+          generatedAt: "2026-05-09T00:00:02.000Z",
+        },
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const wsUrl = baseUrl.replace("http://", "ws://");
+          const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const messages: unknown[] = [];
+          webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+          await new Promise<void>((resolve) => webSocket.once("open", resolve));
+          await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+          const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({ type: "remote_tree_navigation_result", requestId: "req_nav_1", ok: true, leafId: "active_user", snapshotVersion: "treev_2", branchVersion: "branchv_2", editorText: "active" }),
+          });
+          expect(response.status).toBe(200);
+
+          await vi.waitFor(() => {
+            expect(messages).toContainEqual({ type: "remote_tree_navigation_result", requestId: "req_nav_1", ok: true, leafId: "active_user", snapshotVersion: "treev_2", branchVersion: "branchv_2", editorText: "active" });
+            const sessionStates = messages.filter((message) => typeof message === "object" && message !== null && (message as { type?: unknown }).type === "session_state");
+            expect(sessionStates.at(-1)).toMatchObject({ type: "session_state", state: { messages: [{ id: "root_user" }, { id: "active_user" }] } });
+          });
+          webSocket.close();
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("stores and broadcasts remote Tree Snapshots from active TUI sessions", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
@@ -729,6 +796,221 @@ describe("daemon HTTP server", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ snapshot });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("queues Remote Tree Navigation for matching fresh Tree Snapshot state", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const treeSnapshot = {
+      sessionId: "sess_1",
+      leafId: "entry_1",
+      snapshotVersion: "treev_1",
+      branchVersion: "branchv_1",
+      entries: [
+        { id: "entry_1", parentId: null, type: "message" as const, role: "assistant" as const, title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" as const },
+      ],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:00.000Z",
+    };
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 1,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot,
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({
+            targetEntryId: "entry_1",
+            baseSnapshotVersion: "treev_1",
+            baseBranchVersion: "branchv_1",
+            baseLeafId: "entry_1",
+            summaryMode: "none",
+          }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([
+          {
+            type: "remote_tree_navigate",
+            requestId: expect.stringMatching(/^req_/),
+            targetEntryId: "entry_1",
+            baseSnapshotVersion: "treev_1",
+            baseBranchVersion: "branchv_1",
+            baseLeafId: "entry_1",
+            summaryMode: "none",
+          },
+        ]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Tree Navigation when client branch guards no longer match", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "entry_current",
+        snapshotVersion: "treev_current",
+        branchVersion: "branchv_current",
+        entries: [{ id: "entry_current", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "entry_current", baseSnapshotVersion: "treev_old", baseBranchVersion: "branchv_current", baseLeafId: "entry_current", summaryMode: "none" }),
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "tree_state_changed" });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Tree Navigation when the target entry is not in the current Tree Snapshot", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "entry_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "entry_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "missing", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "entry_1", summaryMode: "none" }),
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "target_not_found" });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Tree Navigation from stale Tree Snapshots", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeStateStale: true,
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "entry_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "entry_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "entry_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "entry_1", summaryMode: "none" }),
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "tree_state_changed" });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Tree Navigation while the owning session is busy", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: true,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "entry_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "entry_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "entry_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "entry_1", summaryMode: "none" }),
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "session_busy" });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([]);
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );

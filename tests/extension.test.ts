@@ -735,6 +735,48 @@ describe("remote control extension", () => {
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
   });
 
+  it("navigates the live TUI tree and posts a Remote Tree Navigation result", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn(async () => ({ cancelled: false, editorText: "revise this prompt" }));
+    ctx.sessionManager.getLeafId = () => "entry_parent";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_parent", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: "parent" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+      type: "remote_tree_navigate",
+      requestId: "req_nav_1",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_parent",
+      summaryMode: "none",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: {
+        method: "POST",
+        body: expect.objectContaining({
+          type: "remote_tree_navigation_result",
+          requestId: "req_nav_1",
+          ok: true,
+          leafId: "entry_parent",
+          editorText: "revise this prompt",
+        }),
+      },
+    }));
+    expect(navigateTree).toHaveBeenCalledWith("entry_user", { summarize: false });
+  });
+
   it("posts a fresh Tree Snapshot when handling remote Tree Refresh", async () => {
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(

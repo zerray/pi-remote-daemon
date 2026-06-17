@@ -121,6 +121,10 @@ export type RuntimeStatus = {
 
 export type RemoteTreeSnapshotEvent = { type: "remote_tree_snapshot"; requestId?: string; snapshot: TreeSnapshot };
 
+export type RemoteTreeNavigationResultEvent =
+  | { type: "remote_tree_navigation_result"; requestId: string; ok: true; leafId: string | null; snapshotVersion: string; branchVersion: string; editorText?: string }
+  | { type: "remote_tree_navigation_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "summarization_failed" | "cancelled" | "aborted" };
+
 export type RemoteCompactResultEvent =
   | { type: "remote_compact_result"; requestId: string; ok: true; summary: string; firstKeptEntryId: string; tokensBefore: number }
   | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
@@ -129,6 +133,7 @@ export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
   | { type: "runtime_status"; status: RuntimeStatus }
   | RemoteTreeSnapshotEvent
+  | RemoteTreeNavigationResultEvent
   | RemoteCompactResultEvent
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
   | { type: "turn_end"; turnIndex: number }

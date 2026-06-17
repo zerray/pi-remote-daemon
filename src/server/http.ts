@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RemoteCompactResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
+import type { DaemonConfig, RemoteCompactResultEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -244,6 +244,13 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isRemoteTreeNavigationResultEvent(event)) {
+      if (event.ok) options.activeSessions?.updateTreeState(sessionId, { leafId: event.leafId, branchVersion: event.branchVersion });
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      if (event.ok) broadcastSessionState(sessionId, options, streamHub);
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteCompactResultEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       writeJson(response, 200, { accepted: true });
@@ -349,6 +356,57 @@ async function handleHttpRequest(
       await options.sessionService?.promptSession?.(sessionId, body);
     }
     writeJson(response, 200, { accepted: true });
+    return;
+  }
+
+  const treeNavigateMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/tree\/navigate$/);
+  if (request.method === "POST" && treeNavigateMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(treeNavigateMatch[1] ?? "");
+    const requestId = nextRequestId();
+    const body = (await readJsonBody(request)) as {
+      targetEntryId: string;
+      baseSnapshotVersion: string;
+      baseBranchVersion: string;
+      baseLeafId: string | null;
+      summaryMode: "none";
+    };
+    if (options.activeSessions) {
+      const state = options.activeSessions.getSessionState(sessionId, { messageLimit: 1 });
+      if (!state) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+      if (state.isStreaming) {
+        writeJson(response, 409, { error: "session_busy" });
+        return;
+      }
+      const treeResult = options.activeSessions.getTreeSnapshot(sessionId);
+      if (!treeResult.ok) {
+        writeJson(response, 409, { error: treeResult.error });
+        return;
+      }
+      if (treeResult.snapshot.stale === true
+        || treeResult.snapshot.snapshotVersion !== body.baseSnapshotVersion
+        || treeResult.snapshot.branchVersion !== body.baseBranchVersion
+        || treeResult.snapshot.leafId !== body.baseLeafId) {
+        writeJson(response, 409, { error: "tree_state_changed" });
+        return;
+      }
+      if (!treeResult.snapshot.entries.some((entry) => entry.id === body.targetEntryId)) {
+        writeJson(response, 409, { error: "target_not_found" });
+        return;
+      }
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_tree_navigate", requestId, ...body })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    }
+    writeJson(response, 200, { accepted: true, requestId });
     return;
   }
 
@@ -554,6 +612,19 @@ function isRemoteTreeSnapshotEvent(event: unknown): event is RemoteTreeSnapshotE
     && typeof snapshot.snapshotVersion === "string"
     && typeof snapshot.branchVersion === "string"
     && Array.isArray(snapshot.entries);
+}
+
+function isRemoteTreeNavigationResultEvent(event: unknown): event is RemoteTreeNavigationResultEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "remote_tree_navigation_result" || typeof record.requestId !== "string") return false;
+  if (record.ok === true) {
+    return (record.leafId === null || typeof record.leafId === "string")
+      && typeof record.snapshotVersion === "string"
+      && typeof record.branchVersion === "string"
+      && (record.editorText === undefined || typeof record.editorText === "string");
+  }
+  return record.ok === false && typeof record.error === "string";
 }
 
 function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {
