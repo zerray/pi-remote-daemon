@@ -57,6 +57,37 @@ export type TranscriptMessagePatch =
   | { type: "toolCall"; toolCall: Extract<TranscriptContentBlock, { type: "toolCall" }> }
   | { type: "replace"; message: TranscriptMessage };
 
+export type TreeFilter = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
+
+export type TreeSnapshot = {
+  sessionId: string;
+  leafId: string | null;
+  snapshotVersion: string;
+  branchVersion: string;
+  entries: TreeEntry[];
+  defaultFilter: "default";
+  filters: TreeFilter[];
+  generatedAt: IsoTimestamp;
+  stale?: boolean;
+};
+
+export type TreeEntry = {
+  id: string;
+  parentId: string | null;
+  type: "message" | "custom_message" | "branch_summary" | "compaction" | "model_change" | "thinking_level_change" | "label" | "session_info" | "custom" | "other";
+  role?: "user" | "assistant" | "toolResult" | "system" | "custom";
+  customType?: string;
+  title: string;
+  preview: string;
+  previewTruncated?: boolean;
+  timestamp: IsoTimestamp;
+  label?: string;
+  isCurrentLeaf: boolean;
+  isOnActiveBranch: boolean;
+  isForkable: boolean;
+  navigationBehavior: "edit_prompt" | "navigate";
+};
+
 export type RuntimeStatus = {
   model: null | {
     provider: string;

@@ -17,6 +17,8 @@ type ExtensionTestContext = {
     getSessionFile(): string | undefined;
     getSessionName(): string | undefined;
     getEntries(): unknown[];
+    getLeafId?(): string | null;
+    getTree?(): unknown[];
   };
   model?: unknown;
   getContextUsage?(): unknown;
@@ -182,6 +184,56 @@ describe("remote control extension", () => {
       },
     ]);
     expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
+  });
+
+  it("registers an initial reduced Tree Snapshot when tree state is available", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    const longPreview = "x".repeat(501);
+    ctx.sessionManager.getLeafId = () => "assistant_1";
+    ctx.sessionManager.getTree = () => [
+      {
+        entry: { type: "message", id: "user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "Inspect the auth flow" } },
+        label: "checkpoint",
+        children: [
+          { entry: { type: "message", id: "assistant_1", parentId: "user_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "I'll inspect it." }] } }, children: [] },
+          { entry: { type: "custom_message", id: "custom_1", parentId: "user_1", timestamp: "2026-05-09T00:00:02.000Z", customType: "fixture", content: longPreview, display: true }, children: [] },
+          { entry: { type: "compaction", id: "compact_1", parentId: "user_1", timestamp: "2026-05-09T00:00:03.000Z", summary: "Earlier auth investigation", tokensBefore: 12345 }, children: [] },
+          { entry: { type: "branch_summary", id: "branch_1", parentId: "user_1", timestamp: "2026-05-09T00:00:04.000Z", summary: "Explored OAuth branch", fromId: "assistant_1" }, children: [] },
+          { entry: { type: "label", id: "label_1", parentId: "user_1", timestamp: "2026-05-09T00:00:05.000Z", targetId: "user_1", label: "checkpoint" }, children: [] },
+        ],
+      },
+    ];
+    let registrationBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/tui/sessions")) registrationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    const snapshot = registrationBody?.treeSnapshot as { entries: Array<Record<string, unknown>>; [key: string]: unknown };
+    expect(snapshot).toMatchObject({
+      sessionId: "sess_pi_1",
+      leafId: "assistant_1",
+      snapshotVersion: expect.stringMatching(/^treev_/),
+      branchVersion: expect.stringMatching(/^branchv_/),
+      defaultFilter: "default",
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+    });
+    expect(snapshot.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "user_1", type: "message", role: "user", title: "user", preview: "Inspect the auth flow", label: "checkpoint", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" }),
+      expect.objectContaining({ id: "assistant_1", type: "message", role: "assistant", title: "assistant", preview: "I'll inspect it.", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }),
+      expect.objectContaining({ id: "custom_1", type: "custom_message", role: "custom", customType: "fixture", preview: "x".repeat(500), previewTruncated: true, navigationBehavior: "edit_prompt" }),
+      expect.objectContaining({ id: "compact_1", type: "compaction", title: "compaction", preview: "Earlier auth investigation" }),
+      expect.objectContaining({ id: "branch_1", type: "branch_summary", title: "branch summary", preview: "Explored OAuth branch" }),
+      expect.objectContaining({ id: "label_1", type: "label", title: "label", preview: "checkpoint" }),
+    ]));
+    expect(snapshot.entries.find((entry) => entry.id === "user_1")).not.toHaveProperty("message");
   });
 
   it("reports startup readiness failure without throwing", async () => {

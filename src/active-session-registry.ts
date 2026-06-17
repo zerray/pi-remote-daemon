@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readSessionTranscriptMessages, visibleConversationMessageCount } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
-import type { RuntimeStatus, ToolCallStatus } from "./types.js";
+import type { RuntimeStatus, ToolCallStatus, TreeSnapshot } from "./types.js";
 
 export type ActiveProject = {
   id: string;
@@ -20,6 +20,8 @@ export type ActiveSessionRegistration = {
   isStreaming: boolean;
   updatedAt: string;
   runtimeStatus?: RuntimeStatus;
+  treeSnapshot?: TreeSnapshot;
+  treeStateStale?: boolean;
   entries?: unknown[];
 };
 
@@ -47,6 +49,10 @@ export type ActiveSessionState = TranscriptPage & {
   runtimeStatus: RuntimeStatus | null;
 };
 
+export type ActiveSessionTreeSnapshotResult =
+  | { ok: true; snapshot: TreeSnapshot }
+  | { ok: false; error: "session_not_active" | "tree_state_unavailable" };
+
 export type ActiveSessionNameGenerator = (request: {
   sessionId: string;
   project: ActiveProject;
@@ -65,6 +71,7 @@ export type ActiveSessionRegistry = {
   listProjectSessions(projectId: string): ActiveSessionSummary[];
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
+  getTreeSnapshot(sessionId: string): ActiveSessionTreeSnapshotResult;
   updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
   updateSessionActivity(sessionId: string, activity: { isStreaming: boolean; pendingMessageCount?: number }): boolean;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
@@ -197,6 +204,17 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       const session = sessions.get(sessionId);
       if (!session) return undefined;
       return olderTranscriptPage(readSessionTranscriptMessages(session.sessionFile), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
+    },
+
+    getTreeSnapshot(sessionId) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, error: "session_not_active" };
+      if (!session.treeSnapshot) return { ok: false, error: "tree_state_unavailable" };
+      return {
+        ok: true,
+        snapshot: session.treeStateStale ? { ...session.treeSnapshot, stale: true } : session.treeSnapshot,
+      };
     },
 
     updateRuntimeStatus(sessionId, status) {

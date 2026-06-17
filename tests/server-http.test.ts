@@ -532,6 +532,128 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("returns cached Tree Snapshots for active sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const snapshot = {
+      sessionId: "sess_1",
+      leafId: "entry_assistant_1",
+      snapshotVersion: "treev_1",
+      branchVersion: "branchv_1",
+      entries: [
+        {
+          id: "entry_user_1",
+          parentId: null,
+          type: "message" as const,
+          role: "user" as const,
+          title: "user",
+          preview: "Inspect the auth flow",
+          timestamp: "2026-05-09T00:00:00.000Z",
+          isCurrentLeaf: false,
+          isOnActiveBranch: true,
+          isForkable: true,
+          navigationBehavior: "edit_prompt" as const,
+        },
+        {
+          id: "entry_assistant_1",
+          parentId: "entry_user_1",
+          type: "message" as const,
+          role: "assistant" as const,
+          title: "assistant",
+          preview: "I'll inspect it.",
+          timestamp: "2026-05-09T00:00:01.000Z",
+          isCurrentLeaf: true,
+          isOnActiveBranch: true,
+          isForkable: false,
+          navigationBehavior: "navigate" as const,
+        },
+      ],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:02.000Z",
+    };
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: snapshot,
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ snapshot });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("returns stale cached Tree Snapshots but reports unavailable tree state when no snapshot exists", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const staleSnapshot = {
+      sessionId: "sess_stale",
+      leafId: "entry_1",
+      snapshotVersion: "treev_stale",
+      branchVersion: "branchv_stale",
+      entries: [],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:00.000Z",
+    };
+    activeSessions.registerSession({
+      id: "sess_stale",
+      piSessionId: "pi_stale",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/stale.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: staleSnapshot,
+      treeStateStale: true,
+    });
+    activeSessions.registerSession({
+      id: "sess_no_tree",
+      piSessionId: "pi_no_tree",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/no-tree.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const staleResponse = await fetch(`${baseUrl}/v1/sessions/sess_stale/tree`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const noSnapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_no_tree/tree`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const missingResponse = await fetch(`${baseUrl}/v1/sessions/missing/tree`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(staleResponse.status).toBe(200);
+        await expect(staleResponse.json()).resolves.toEqual({ snapshot: { ...staleSnapshot, stale: true } });
+        expect(noSnapshotResponse.status).toBe(409);
+        await expect(noSnapshotResponse.json()).resolves.toEqual({ error: "tree_state_unavailable" });
+        expect(missingResponse.status).toBe(409);
+        await expect(missingResponse.json()).resolves.toEqual({ error: "session_not_active" });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("returns an authenticated session snapshot", async () => {
     await withServer(
       async (baseUrl) => {

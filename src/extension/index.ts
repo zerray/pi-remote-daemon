@@ -8,6 +8,7 @@ import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
 import { projectIdForPath } from "../session-index.js";
+import { buildTreeSnapshot } from "../tree-snapshot.js";
 import { createTranscriptEventCanonicalizer } from "./transcript-event-canonicalizer.js";
 
 export { collectRuntimeStatus } from "../runtime-status.js";
@@ -282,8 +283,23 @@ function toRegistration(pi: unknown, ctx: ExtensionCommandContext): unknown {
     entries: ctx.sessionManager.getEntries(),
     isStreaming: !ctx.isIdle(),
     runtimeStatus: collectRuntimeStatus(pi, ctx),
+    treeSnapshot: treeSnapshotForContext(ctx),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function treeSnapshotForContext(ctx: ExtensionCommandContext): unknown {
+  const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
+    getTree?: () => unknown[];
+    getLeafId?: () => string | null;
+  };
+  const roots = sessionManager.getTree?.();
+  if (!roots) return undefined;
+  return buildTreeSnapshot({
+    sessionId: daemonSessionId(ctx),
+    roots: roots as never,
+    leafId: sessionManager.getLeafId?.() ?? null,
+  });
 }
 
 function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string {

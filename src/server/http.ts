@@ -340,6 +340,23 @@ async function handleHttpRequest(
     return;
   }
 
+  const treeMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/tree$/);
+  if (request.method === "GET" && treeMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(treeMatch[1] ?? "");
+    const result = options.activeSessions?.getTreeSnapshot(sessionId) ?? { ok: false as const, error: "session_not_active" as const };
+    if (!result.ok) {
+      writeJson(response, 409, { error: result.error });
+      return;
+    }
+    writeJson(response, 200, { snapshot: result.snapshot });
+    return;
+  }
+
   const sessionMessagesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
   if (request.method === "GET" && sessionMessagesMatch) {
     if (!(await isAuthorized(request, options))) {
