@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RemoteCompactResultEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
+import type { DaemonConfig, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -251,6 +251,18 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isRemoteForkResultEvent(event)) {
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
+    if (isRemoteSessionReplacedEvent(event)) {
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      options.activeSessions?.unregisterSession(sessionId);
+      closeSessions([sessionId], streamHub);
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteCompactResultEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       writeJson(response, 200, { accepted: true });
@@ -356,6 +368,62 @@ async function handleHttpRequest(
       await options.sessionService?.promptSession?.(sessionId, body);
     }
     writeJson(response, 200, { accepted: true });
+    return;
+  }
+
+  const forkMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/fork$/);
+  if (request.method === "POST" && forkMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(forkMatch[1] ?? "");
+    const requestId = nextRequestId();
+    const bodyRecord = (await readJsonBody(request)) as Record<string, unknown>;
+    const body = {
+      targetEntryId: typeof bodyRecord.targetEntryId === "string" ? bodyRecord.targetEntryId : "",
+      baseSnapshotVersion: typeof bodyRecord.baseSnapshotVersion === "string" ? bodyRecord.baseSnapshotVersion : "",
+      baseBranchVersion: typeof bodyRecord.baseBranchVersion === "string" ? bodyRecord.baseBranchVersion : "",
+      baseLeafId: bodyRecord.baseLeafId === null || typeof bodyRecord.baseLeafId === "string" ? bodyRecord.baseLeafId : null,
+    };
+    if (options.activeSessions) {
+      const state = options.activeSessions.getSessionState(sessionId, { messageLimit: 1 });
+      if (!state) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+      if (state.isStreaming) {
+        writeJson(response, 409, { error: "session_busy" });
+        return;
+      }
+      const treeResult = options.activeSessions.getTreeSnapshot(sessionId);
+      if (!treeResult.ok) {
+        writeJson(response, 409, { error: treeResult.error });
+        return;
+      }
+      if (treeResult.snapshot.stale === true
+        || treeResult.snapshot.snapshotVersion !== body.baseSnapshotVersion
+        || treeResult.snapshot.branchVersion !== body.baseBranchVersion
+        || treeResult.snapshot.leafId !== body.baseLeafId) {
+        writeJson(response, 409, { error: "tree_state_changed" });
+        return;
+      }
+      const target = treeResult.snapshot.entries.find((entry) => entry.id === body.targetEntryId);
+      if (!target) {
+        writeJson(response, 409, { error: "target_not_found" });
+        return;
+      }
+      if (!target.isForkable) {
+        writeJson(response, 409, { error: "target_not_forkable" });
+        return;
+      }
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_fork", requestId, ...body })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    }
+    writeJson(response, 200, { accepted: true, requestId });
     return;
   }
 
@@ -630,6 +698,23 @@ function isRemoteTreeNavigationResultEvent(event: unknown): event is RemoteTreeN
       && (record.editorText === undefined || typeof record.editorText === "string");
   }
   return record.ok === false && typeof record.error === "string";
+}
+
+function isRemoteForkResultEvent(event: unknown): event is RemoteForkResultEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "remote_fork_result" || typeof record.requestId !== "string") return false;
+  if (record.ok === true) return Boolean(record.newSession) && typeof record.editorText === "string";
+  return record.ok === false && typeof record.error === "string";
+}
+
+function isRemoteSessionReplacedEvent(event: unknown): event is RemoteSessionReplacedEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  return record.type === "remote_session_replaced"
+    && typeof record.requestId === "string"
+    && typeof record.oldSessionId === "string"
+    && Boolean(record.newSession);
 }
 
 function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {

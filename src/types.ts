@@ -125,6 +125,12 @@ export type RemoteTreeNavigationResultEvent =
   | { type: "remote_tree_navigation_result"; requestId: string; ok: true; leafId: string | null; snapshotVersion: string; branchVersion: string; editorText?: string }
   | { type: "remote_tree_navigation_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "summarization_failed" | "cancelled" | "aborted" };
 
+export type RemoteForkResultEvent =
+  | { type: "remote_fork_result"; requestId: string; ok: true; newSession: unknown; editorText: string }
+  | { type: "remote_fork_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "target_not_forkable" | "cancelled" | "aborted" };
+
+export type RemoteSessionReplacedEvent = { type: "remote_session_replaced"; requestId: string; oldSessionId: string; newSession: unknown };
+
 export type RemoteCompactResultEvent =
   | { type: "remote_compact_result"; requestId: string; ok: true; summary: string; firstKeptEntryId: string; tokensBefore: number }
   | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
@@ -134,6 +140,8 @@ export type TranscriptStreamEvent =
   | { type: "runtime_status"; status: RuntimeStatus }
   | RemoteTreeSnapshotEvent
   | RemoteTreeNavigationResultEvent
+  | RemoteForkResultEvent
+  | RemoteSessionReplacedEvent
   | RemoteCompactResultEvent
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
   | { type: "turn_end"; turnIndex: number }

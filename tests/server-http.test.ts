@@ -419,6 +419,74 @@ describe("daemon HTTP server", () => {
     }
   });
 
+  it("broadcasts Remote Fork handoff events and removes the old session after replacement", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_old",
+      piSessionId: "pi_old",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/old.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    const newSession = {
+      id: "sess_new",
+      piSessionId: "pi_new",
+      projectId: "proj_1",
+      name: "Forked",
+      path: "/tmp/new.jsonl",
+      updatedAt: "2026-05-09T00:00:01.000Z",
+      messageCount: 1,
+      isActive: true,
+    };
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_old/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+        await fetch(`${baseUrl}/v1/tui/sessions`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ id: "sess_new", piSessionId: "pi_new", project: { id: "proj_1", name: "Example", path: "/repo/example" }, sessionFile: "/tmp/new.jsonl", name: "Forked", pid: 5678, messageCount: 1, isStreaming: false, updatedAt: "2026-05-09T00:00:01.000Z" }),
+        });
+        await fetch(`${baseUrl}/v1/tui/sessions/sess_old/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "remote_fork_result", requestId: "req_fork_1", ok: true, newSession, editorText: "draft" }),
+        });
+        await fetch(`${baseUrl}/v1/tui/sessions/sess_old/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "remote_session_replaced", requestId: "req_fork_1", oldSessionId: "sess_old", newSession }),
+        });
+
+        await vi.waitFor(() => {
+          expect(messages).toEqual(expect.arrayContaining([
+            { type: "remote_fork_result", requestId: "req_fork_1", ok: true, newSession, editorText: "draft" },
+            { type: "remote_session_replaced", requestId: "req_fork_1", oldSessionId: "sess_old", newSession },
+            { type: "session_closed" },
+          ]));
+        });
+        const sessionsResponse = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const sessionsBody = (await sessionsResponse.json()) as { sessions: Array<{ id: string }> };
+        expect(sessionsBody.sessions.map((session) => session.id)).toEqual(["sess_new"]);
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("broadcasts Remote Tree Navigation results and refreshed active-branch session state", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-tree-nav-http-"));
     const sessionFile = join(root, "session.jsonl");
@@ -796,6 +864,102 @@ describe("daemon HTTP server", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ snapshot });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Fork for busy sessions, stale tree state, and non-forkable targets", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const makeSession = (id: string, overrides: { isStreaming?: boolean; treeStateStale?: boolean; isForkable?: boolean }) => activeSessions.registerSession({
+      id,
+      piSessionId: `pi_${id}`,
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: `/tmp/${id}.jsonl`,
+      pid: 1234,
+      messageCount: 1,
+      isStreaming: overrides.isStreaming ?? false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeStateStale: overrides.treeStateStale,
+      treeSnapshot: {
+        sessionId: id,
+        leafId: "assistant_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [
+          { id: "user_1", parentId: null, type: "message", role: "user", title: "user", preview: "draft", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: overrides.isForkable ?? true, navigationBehavior: "edit_prompt" },
+          { id: "assistant_1", parentId: "user_1", type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+        ],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:01.000Z",
+      },
+    });
+    makeSession("sess_busy", { isStreaming: true });
+    makeSession("sess_stale", { treeStateStale: true });
+    makeSession("sess_not_forkable", { isForkable: false });
+
+    await withServer(
+      async (baseUrl) => {
+        for (const [sessionId, expectedError] of [
+          ["sess_busy", "session_busy"],
+          ["sess_stale", "tree_state_changed"],
+          ["sess_not_forkable", "target_not_forkable"],
+        ] as const) {
+          const response = await fetch(`${baseUrl}/v1/sessions/${sessionId}/fork`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({ targetEntryId: "user_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" }),
+          });
+          expect(response.status).toBe(409);
+          await expect(response.json()).resolves.toEqual({ error: expectedError });
+          expect(activeSessions.takeCommands(sessionId)).toEqual([]);
+        }
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("queues Remote Fork for a forkable target from matching fresh Tree Snapshot state", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const treeSnapshot = {
+      sessionId: "sess_1",
+      leafId: "assistant_1",
+      snapshotVersion: "treev_1",
+      branchVersion: "branchv_1",
+      entries: [
+        { id: "user_1", parentId: null, type: "message" as const, role: "user" as const, title: "user", preview: "draft me", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" as const },
+        { id: "assistant_1", parentId: "user_1", type: "message" as const, role: "assistant" as const, title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" as const },
+      ],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:01.000Z",
+    };
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 2,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:01.000Z",
+      treeSnapshot,
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/fork`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "user_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([
+          { type: "remote_fork", requestId: expect.stringMatching(/^req_/), targetEntryId: "user_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" },
+        ]);
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );

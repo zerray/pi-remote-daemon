@@ -3,7 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
-import type { RemoteCompactResultEvent, RemoteTreeNavigationResultEvent } from "../types.js";
+import type { RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
@@ -386,7 +386,7 @@ function disconnectLocalSession(
 
 export function handleRemoteCommand(
   pi: Pick<ExtensionAPI, "sendUserMessage">,
-  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle" | "navigateTree" | "sessionManager">,
+  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "fork" | "isIdle" | "navigateTree" | "sessionManager">,
   command: RemoteTuiCommand,
   sessionId?: string,
 ): void {
@@ -398,11 +398,69 @@ export function handleRemoteCommand(
   if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
   if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
   if (command.type === "remote_tree_navigate") handleRemoteTreeNavigateCommand(ctx, command, sessionId);
+  if (command.type === "remote_fork") handleRemoteForkCommand(pi, ctx, command, sessionId);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
   if (streamingBehavior) return { deliverAs: streamingBehavior };
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
+}
+
+function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  void (async () => {
+    try {
+      let replacementSummary: unknown;
+      const result = await ctx.fork(command.targetEntryId, {
+        position: "before",
+        withSession: async (replacementCtx) => {
+          replacementCtx.ui.setEditorText("");
+          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+            method: "POST",
+            headers: await tuiHeaders(),
+            body: JSON.stringify(registration),
+          });
+          const responseBody = asRecord(await response.json().catch(() => ({})));
+          replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+        },
+      });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteForkResultEvent);
+        return;
+      }
+      const newSession = replacementSummary ?? {};
+      const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? "";
+      await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
+      await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+    } catch (error) {
+      await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: forkErrorCode(error) } satisfies RemoteForkResultEvent);
+    }
+  })().catch(() => undefined);
+}
+
+function forkErrorCode(error: unknown): Extract<RemoteForkResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("not found")) return "target_not_found";
+  if (message.toLowerCase().includes("forkable")) return "target_not_forkable";
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "cancelled";
+}
+
+function summaryFromRegistration(registration: unknown): unknown {
+  const record = asRecord(registration);
+  const project = asRecord(record.project);
+  return {
+    id: readString(record.id) ?? "",
+    piSessionId: readString(record.piSessionId) ?? "",
+    projectId: readString(project.id) ?? "",
+    name: readString(record.name) ?? null,
+    path: readString(record.sessionFile) ?? "",
+    updatedAt: readString(record.updatedAt) ?? new Date().toISOString(),
+    messageCount: readNumber(record.messageCount) ?? 0,
+    isActive: true,
+  };
 }
 
 function handleRemoteTreeNavigateCommand(ctx: Pick<ExtensionCommandContext, "navigateTree" | "sessionManager">, command: Extract<RemoteTuiCommand, { type: "remote_tree_navigate" }>, sessionId: string | undefined): void {
