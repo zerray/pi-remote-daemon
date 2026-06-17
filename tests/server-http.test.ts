@@ -349,6 +349,76 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("uses package-internal tree_state updates for transcript reads without forwarding them to iOS", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-tree-state-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "root_user", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "root" } }),
+        JSON.stringify({ type: "message", id: "root_assistant", parentId: "root_user", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "root reply" } }),
+        JSON.stringify({ type: "message", id: "abandoned_user", parentId: "root_assistant", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "abandoned" } }),
+        JSON.stringify({ type: "message", id: "active_user", parentId: "root_assistant", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "user", content: "active" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 4,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:04.000Z",
+        treeSnapshot: {
+          sessionId: "sess_1",
+          leafId: "root_assistant",
+          snapshotVersion: "treev_1",
+          branchVersion: "branchv_1",
+          entries: [
+            { id: "root_user", parentId: null, type: "message", role: "user", title: "user", preview: "root", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "root_assistant", parentId: "root_user", type: "message", role: "assistant", title: "assistant", preview: "root reply", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+          ],
+          defaultFilter: "default",
+          filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+          generatedAt: "2026-05-09T00:00:02.000Z",
+        },
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const wsUrl = baseUrl.replace("http://", "ws://");
+          const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const messages: unknown[] = [];
+          webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+          await new Promise<void>((resolve) => webSocket.once("open", resolve));
+          await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+          const eventResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({ type: "tree_state", leafId: "active_user", branchVersion: "branchv_2" }),
+          });
+          expect(eventResponse.status).toBe(200);
+
+          const stateResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=10`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const state = (await stateResponse.json()) as { messages: Array<{ id: string }> };
+          await new Promise((resolve) => setTimeout(resolve, 20));
+
+          expect(state.messages.map((message) => message.id)).toEqual(["root_user", "root_assistant", "active_user"]);
+          expect(messages).not.toContainEqual(expect.objectContaining({ type: "tree_state" }));
+          webSocket.close();
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("stores and broadcasts remote Tree Snapshots from active TUI sessions", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
@@ -858,6 +928,122 @@ describe("daemon HTTP server", () => {
     }
   });
 
+  it("returns session snapshots from the active branch when tree state is valid", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-active-branch-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "root_user", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "root" } }),
+        JSON.stringify({ type: "message", id: "root_assistant", parentId: "root_user", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "root reply" } }),
+        JSON.stringify({ type: "message", id: "abandoned_user", parentId: "root_assistant", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "abandoned" } }),
+        JSON.stringify({ type: "message", id: "abandoned_assistant", parentId: "abandoned_user", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: "abandoned reply" } }),
+        JSON.stringify({ type: "branch_summary", id: "branch_summary_1", parentId: "root_assistant", timestamp: "2026-05-09T00:00:05.000Z", summary: "Left abandoned branch", fromId: "abandoned_assistant" }),
+        JSON.stringify({ type: "message", id: "active_user", parentId: "branch_summary_1", timestamp: "2026-05-09T00:00:06.000Z", message: { role: "user", content: "active" } }),
+        JSON.stringify({ type: "compaction", id: "compaction_1", parentId: "active_user", timestamp: "2026-05-09T00:00:07.000Z", summary: "Earlier context", firstKeptEntryId: "root_assistant", tokensBefore: 1000 }),
+        JSON.stringify({ type: "message", id: "active_assistant", parentId: "compaction_1", timestamp: "2026-05-09T00:00:08.000Z", message: { role: "assistant", content: "active reply" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 8,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:08.000Z",
+        treeSnapshot: {
+          sessionId: "sess_1",
+          leafId: "active_assistant",
+          snapshotVersion: "treev_1",
+          branchVersion: "branchv_1",
+          entries: [
+            { id: "root_user", parentId: null, type: "message", role: "user", title: "user", preview: "root", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "root_assistant", parentId: "root_user", type: "message", role: "assistant", title: "assistant", preview: "root reply", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "abandoned_user", parentId: "root_assistant", type: "message", role: "user", title: "user", preview: "abandoned", timestamp: "2026-05-09T00:00:03.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "abandoned_assistant", parentId: "abandoned_user", type: "message", role: "assistant", title: "assistant", preview: "abandoned reply", timestamp: "2026-05-09T00:00:04.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: false, navigationBehavior: "navigate" },
+            { id: "branch_summary_1", parentId: "root_assistant", type: "branch_summary", title: "branch summary", preview: "Left abandoned branch", timestamp: "2026-05-09T00:00:05.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "active_user", parentId: "branch_summary_1", type: "message", role: "user", title: "user", preview: "active", timestamp: "2026-05-09T00:00:06.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "compaction_1", parentId: "active_user", type: "compaction", title: "compaction", preview: "Earlier context", timestamp: "2026-05-09T00:00:07.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "active_assistant", parentId: "compaction_1", type: "message", role: "assistant", title: "assistant", preview: "active reply", timestamp: "2026-05-09T00:00:08.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+          ],
+          defaultFilter: "default",
+          filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+          generatedAt: "2026-05-09T00:00:08.000Z",
+        },
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=10`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const body = (await response.json()) as { session: { messageCount: number }; messages: Array<{ id: string }> };
+
+          expect(response.status).toBe(200);
+          expect(body.messages.map((message) => message.id)).toEqual(["root_user", "root_assistant", "active_user", "active_assistant"]);
+          expect(body.session.messageCount).toBe(4);
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to linear transcripts and marks the Tree Snapshot stale when its leaf is invalid", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-invalid-branch-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    const treeSnapshot = {
+      sessionId: "sess_1",
+      leafId: "missing_leaf",
+      snapshotVersion: "treev_invalid",
+      branchVersion: "branchv_invalid",
+      entries: [
+        { id: "msg_1", parentId: null, type: "message" as const, role: "user" as const, title: "user", preview: "one", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: true, navigationBehavior: "edit_prompt" as const },
+      ],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:01.000Z",
+    };
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "msg_1", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "one" } }),
+        JSON.stringify({ type: "message", id: "msg_2", parentId: "msg_1", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "two" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 2,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:02.000Z",
+        treeSnapshot,
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const stateResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=10`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const state = (await stateResponse.json()) as { messages: Array<{ id: string }> };
+          const treeResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/tree`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+
+          expect(state.messages.map((message) => message.id)).toEqual(["msg_1", "msg_2"]);
+          await expect(treeResponse.json()).resolves.toEqual({ snapshot: { ...treeSnapshot, stale: true } });
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns bounded session snapshots with older message cursors", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-bounded-http-"));
     const sessionFile = join(root, "session.jsonl");
@@ -890,6 +1076,127 @@ describe("daemon HTTP server", () => {
           expect(body.messages.map((message) => message.id)).toEqual(["msg_2", "msg_3"]);
           expect(body.hasOlderMessages).toBe(true);
           expect(typeof body.olderMessagesCursor).toBe("string");
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves assistant tool-call parents in active-branch transcript windows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-active-tool-parent-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "root_user", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "root" } }),
+        JSON.stringify({ type: "message", id: "tool_parent", parentId: "root_user", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }] } }),
+        JSON.stringify({ type: "message", id: "abandoned_result", parentId: "tool_parent", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "toolResult", toolCallId: "call_other", toolName: "bash", content: "abandoned" } }),
+        JSON.stringify({ type: "message", id: "filler", parentId: "tool_parent", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "user", content: "continue" } }),
+        JSON.stringify({ type: "message", id: "tool_result", parentId: "filler", timestamp: "2026-05-09T00:00:05.000Z", message: { role: "toolResult", toolCallId: "call_1", toolName: "bash", content: "result" } }),
+        JSON.stringify({ type: "message", id: "latest", parentId: "tool_result", timestamp: "2026-05-09T00:00:06.000Z", message: { role: "assistant", content: "done" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 6,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:06.000Z",
+        treeSnapshot: {
+          sessionId: "sess_1",
+          leafId: "latest",
+          snapshotVersion: "treev_1",
+          branchVersion: "branchv_1",
+          entries: [
+            { id: "root_user", parentId: null, type: "message", role: "user", title: "user", preview: "root", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "tool_parent", parentId: "root_user", type: "message", role: "assistant", title: "assistant", preview: "", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "abandoned_result", parentId: "tool_parent", type: "message", role: "toolResult", title: "toolResult", preview: "abandoned", timestamp: "2026-05-09T00:00:03.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: false, navigationBehavior: "navigate" },
+            { id: "filler", parentId: "tool_parent", type: "message", role: "user", title: "user", preview: "continue", timestamp: "2026-05-09T00:00:04.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "tool_result", parentId: "filler", type: "message", role: "toolResult", title: "toolResult", preview: "result", timestamp: "2026-05-09T00:00:05.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "latest", parentId: "tool_result", type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:06.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+          ],
+          defaultFilter: "default",
+          filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+          generatedAt: "2026-05-09T00:00:06.000Z",
+        },
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const body = (await response.json()) as { messages: Array<{ id: string }> };
+
+          expect(response.status).toBe(200);
+          expect(body.messages.map((message) => message.id)).toEqual(["tool_parent", "tool_result", "latest"]);
+        },
+        { activeSessions, authenticateToken: (token) => token === "test-token" },
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns older active-branch transcript pages before a cursor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-active-page-http-"));
+    const sessionFile = join(root, "session.jsonl");
+    const activeSessions = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "root_user", parentId: null, timestamp: "2026-05-09T00:00:01.000Z", message: { role: "user", content: "root" } }),
+        JSON.stringify({ type: "message", id: "root_assistant", parentId: "root_user", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "root reply" } }),
+        JSON.stringify({ type: "message", id: "abandoned_user", parentId: "root_assistant", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "user", content: "abandoned" } }),
+        JSON.stringify({ type: "message", id: "active_user", parentId: "root_assistant", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "user", content: "active" } }),
+        JSON.stringify({ type: "message", id: "active_assistant", parentId: "active_user", timestamp: "2026-05-09T00:00:05.000Z", message: { role: "assistant", content: "active reply" } }),
+      ].join("\n"));
+      activeSessions.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 5,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:05.000Z",
+        treeSnapshot: {
+          sessionId: "sess_1",
+          leafId: "active_assistant",
+          snapshotVersion: "treev_1",
+          branchVersion: "branchv_1",
+          entries: [
+            { id: "root_user", parentId: null, type: "message", role: "user", title: "user", preview: "root", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "root_assistant", parentId: "root_user", type: "message", role: "assistant", title: "assistant", preview: "root reply", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+            { id: "abandoned_user", parentId: "root_assistant", type: "message", role: "user", title: "user", preview: "abandoned", timestamp: "2026-05-09T00:00:03.000Z", isCurrentLeaf: false, isOnActiveBranch: false, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "active_user", parentId: "root_assistant", type: "message", role: "user", title: "user", preview: "active", timestamp: "2026-05-09T00:00:04.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+            { id: "active_assistant", parentId: "active_user", type: "message", role: "assistant", title: "assistant", preview: "active reply", timestamp: "2026-05-09T00:00:05.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+          ],
+          defaultFilter: "default",
+          filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+          generatedAt: "2026-05-09T00:00:05.000Z",
+        },
+      });
+
+      await withServer(
+        async (baseUrl) => {
+          const snapshotResponse = await fetch(`${baseUrl}/v1/sessions/sess_1?messageLimit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const snapshot = (await snapshotResponse.json()) as { messages: Array<{ id: string }>; olderMessagesCursor: string };
+          expect(snapshot.messages.map((message) => message.id)).toEqual(["active_user", "active_assistant"]);
+
+          const pageResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/messages?before=${encodeURIComponent(snapshot.olderMessagesCursor)}&limit=2`, {
+            headers: { authorization: "Bearer test-token" },
+          });
+          const page = (await pageResponse.json()) as { messages: Array<{ id: string }>; hasOlderMessages: boolean };
+
+          expect(pageResponse.status).toBe(200);
+          expect(page.messages.map((message) => message.id)).toEqual(["root_user", "root_assistant"]);
+          expect(page.hasOlderMessages).toBe(false);
         },
         { activeSessions, authenticateToken: (token) => token === "test-token" },
       );

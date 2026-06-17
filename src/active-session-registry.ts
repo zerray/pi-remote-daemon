@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readSessionTranscriptMessages, visibleConversationMessageCount } from "./session-transcript.js";
+import { activeBranchEntryIds, activeBranchEntryIdsFromSessionFile, readSessionTranscriptMessages, visibleConversationMessageCount } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
 import type { RuntimeStatus, ToolCallStatus, TreeSnapshot } from "./types.js";
 
@@ -54,6 +54,11 @@ export type ActiveSessionTreeSnapshotResult =
   | { ok: true; snapshot: TreeSnapshot }
   | { ok: false; error: "session_not_active" | "tree_state_unavailable" };
 
+export type ActiveSessionTreeState = {
+  leafId: string | null;
+  branchVersion: string;
+};
+
 export type ActiveSessionNameGenerator = (request: {
   sessionId: string;
   project: ActiveProject;
@@ -74,6 +79,7 @@ export type ActiveSessionRegistry = {
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
   getTreeSnapshot(sessionId: string): ActiveSessionTreeSnapshotResult;
   updateTreeSnapshot(sessionId: string, snapshot: TreeSnapshot): boolean;
+  updateTreeState(sessionId: string, state: ActiveSessionTreeState): boolean;
   updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
   updateSessionActivity(sessionId: string, activity: { isStreaming: boolean; pendingMessageCount?: number }): boolean;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
@@ -94,6 +100,7 @@ type StoredActiveSession = ActiveSessionRegistration & {
   tools: ToolCallStatus[];
   pendingMessageCount: number;
   commands: RemoteTuiCommand[];
+  treeState?: ActiveSessionTreeState;
   lastSeenAtMs: number;
 };
 
@@ -186,7 +193,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
-      const messages = readSessionTranscriptMessages(session.sessionFile);
+      const messages = readSessionMessages(session);
       return {
         session: {
           ...session.summary,
@@ -205,7 +212,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       pruneInactiveSessions();
       const session = sessions.get(sessionId);
       if (!session) return undefined;
-      return olderTranscriptPage(readSessionTranscriptMessages(session.sessionFile), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
+      return olderTranscriptPage(readSessionMessages(session), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
     },
 
     getTreeSnapshot(sessionId) {
@@ -225,6 +232,18 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       if (!session) return false;
       session.treeSnapshot = snapshot;
       session.treeStateStale = false;
+      return true;
+    },
+
+    updateTreeState(sessionId, state) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      session.treeState = state;
+      session.treeStateStale = true;
+      if (session.treeSnapshot) {
+        session.treeSnapshot = { ...session.treeSnapshot, leafId: state.leafId, branchVersion: state.branchVersion };
+      }
       return true;
     },
 
@@ -268,12 +287,23 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
 }
 
 function currentSummary(session: StoredActiveSession): ActiveSessionSummary {
-  const messages = readSessionTranscriptMessages(session.sessionFile);
+  const messages = readSessionMessages(session);
   return {
     ...session.summary,
     messageCount: sessionFileExists(session) ? visibleConversationMessageCount(messages) : session.summary.messageCount,
     updatedAt: messages.at(-1)?.createdAt ?? session.summary.updatedAt,
   };
+}
+
+function readSessionMessages(session: Pick<StoredActiveSession, "sessionFile" | "treeSnapshot" | "treeStateStale" | "treeState">): ReturnType<typeof readSessionTranscriptMessages> {
+  const leafId = session.treeState?.leafId ?? (session.treeStateStale ? null : session.treeSnapshot?.leafId) ?? null;
+  if (!leafId) return readSessionTranscriptMessages(session.sessionFile);
+  const entryIds = activeBranchEntryIdsFromSessionFile(session.sessionFile, leafId) ?? (!session.treeState && session.treeSnapshot ? activeBranchEntryIds(session.treeSnapshot) : undefined);
+  if (!entryIds) {
+    session.treeStateStale = true;
+    return readSessionTranscriptMessages(session.sessionFile);
+  }
+  return readSessionTranscriptMessages(session.sessionFile, { entryIds });
 }
 
 function sessionFileExists(session: Pick<ActiveSessionRegistration, "sessionFile">): boolean {

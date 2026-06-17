@@ -238,6 +238,12 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isTreeStateEvent(event)) {
+      const changed = options.activeSessions?.updateTreeState(sessionId, { leafId: event.leafId, branchVersion: event.branchVersion }) ?? false;
+      if (changed) broadcastSessionState(sessionId, options, streamHub);
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteCompactResultEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       writeJson(response, 200, { accepted: true });
@@ -525,6 +531,14 @@ function isSessionNameEvent(event: unknown): event is { type: "session_name"; na
 
 function isAgentLifecycleEvent(event: unknown): event is { type: "agent_start" | "agent_end" } {
   return Boolean(event && typeof event === "object" && ((event as { type?: unknown }).type === "agent_start" || (event as { type?: unknown }).type === "agent_end"));
+}
+
+function isTreeStateEvent(event: unknown): event is { type: "tree_state"; leafId: string | null; branchVersion: string } {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  return record.type === "tree_state"
+    && (record.leafId === null || typeof record.leafId === "string")
+    && typeof record.branchVersion === "string";
 }
 
 function isRemoteTreeSnapshotEvent(event: unknown): event is RemoteTreeSnapshotEvent {

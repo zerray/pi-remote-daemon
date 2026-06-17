@@ -27,6 +27,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       const sessionNameEvent = sessionNameEventForDaemon(event);
       const events = sessionNameEvent ? [sessionNameEvent] : canonicalizer.canonicalize(event, ctx);
       events.forEach((daemonEvent) => void postTuiEvent(sessionId, daemonEvent));
+      if (events.length > 0) void postTreeStateAfterMessageAppend(event, ctx, sessionId);
       scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, transcriptRetryTimers);
       void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
     }
@@ -152,6 +153,23 @@ function scheduleTranscriptRetry(
   }, 100);
   timer.unref?.();
   retryTimers.set(sessionId, timer);
+}
+
+async function postTreeStateAfterMessageAppend(event: unknown, ctx: ExtensionContext, sessionId: string): Promise<void> {
+  if (asRecord(event).type !== "message_end") return;
+  const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & { getLeafId?: () => string | null };
+  const leafId = sessionManager.getLeafId?.() ?? null;
+  await postTuiEvent(sessionId, {
+    type: "tree_state",
+    leafId,
+    branchVersion: branchVersionForContext(ctx, leafId),
+  });
+}
+
+function branchVersionForContext(ctx: Pick<ExtensionContext, "sessionManager">, leafId: string | null): string {
+  const entries = ctx.sessionManager.getEntries();
+  const latestId = readString(asRecord(entries.at(-1)).id) ?? "none";
+  return `branchv_${Buffer.from(`${leafId ?? "root"}:${entries.length}:${latestId}`, "utf8").toString("base64url")}`;
 }
 
 function sessionNameEventForDaemon(event: unknown): unknown | undefined {
