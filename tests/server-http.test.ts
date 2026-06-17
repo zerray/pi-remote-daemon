@@ -419,6 +419,75 @@ describe("daemon HTTP server", () => {
     }
   });
 
+  it("broadcasts Remote Clone handoff events without editor text and removes the old session after replacement", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_old",
+      piSessionId: "pi_old",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/old.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    const newSession = {
+      id: "sess_new",
+      piSessionId: "pi_new",
+      projectId: "proj_1",
+      name: "Clone",
+      path: "/tmp/new.jsonl",
+      updatedAt: "2026-05-09T00:00:01.000Z",
+      messageCount: 1,
+      isActive: true,
+    };
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_old/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+        await fetch(`${baseUrl}/v1/tui/sessions`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ id: "sess_new", piSessionId: "pi_new", project: { id: "proj_1", name: "Example", path: "/repo/example" }, sessionFile: "/tmp/new.jsonl", name: "Clone", pid: 5678, messageCount: 1, isStreaming: false, updatedAt: "2026-05-09T00:00:01.000Z" }),
+        });
+        await fetch(`${baseUrl}/v1/tui/sessions/sess_old/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "remote_clone_result", requestId: "req_clone_1", ok: true, newSession }),
+        });
+        await fetch(`${baseUrl}/v1/tui/sessions/sess_old/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ type: "remote_session_replaced", requestId: "req_clone_1", oldSessionId: "sess_old", newSession }),
+        });
+
+        await vi.waitFor(() => {
+          expect(messages).toEqual(expect.arrayContaining([
+            { type: "remote_clone_result", requestId: "req_clone_1", ok: true, newSession },
+            { type: "remote_session_replaced", requestId: "req_clone_1", oldSessionId: "sess_old", newSession },
+            { type: "session_closed" },
+          ]));
+        });
+        expect(messages).not.toContainEqual(expect.objectContaining({ type: "remote_clone_result", editorText: expect.any(String) }));
+        const sessionsResponse = await fetch(`${baseUrl}/v1/projects/proj_1/sessions`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const sessionsBody = (await sessionsResponse.json()) as { sessions: Array<{ id: string }> };
+        expect(sessionsBody.sessions.map((session) => session.id)).toEqual(["sess_new"]);
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("broadcasts Remote Fork handoff events and removes the old session after replacement", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
@@ -864,6 +933,90 @@ describe("daemon HTTP server", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ snapshot });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Remote Clone for busy sessions and stale tree state", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    const makeSession = (id: string, overrides: { isStreaming?: boolean; treeStateStale?: boolean }) => activeSessions.registerSession({
+      id,
+      piSessionId: `pi_${id}`,
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: `/tmp/${id}.jsonl`,
+      pid: 1234,
+      messageCount: 1,
+      isStreaming: overrides.isStreaming ?? false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeStateStale: overrides.treeStateStale,
+      treeSnapshot: {
+        sessionId: id,
+        leafId: "assistant_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "assistant_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+    makeSession("sess_busy", { isStreaming: true });
+    makeSession("sess_stale", { treeStateStale: true });
+
+    await withServer(
+      async (baseUrl) => {
+        for (const [sessionId, expectedError] of [["sess_busy", "session_busy"], ["sess_stale", "tree_state_changed"]] as const) {
+          const response = await fetch(`${baseUrl}/v1/sessions/${sessionId}/clone`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({ baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" }),
+          });
+          expect(response.status).toBe(409);
+          await expect(response.json()).resolves.toEqual({ error: expectedError });
+          expect(activeSessions.takeCommands(sessionId)).toEqual([]);
+        }
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("queues Remote Clone for matching fresh Tree Snapshot state", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 1,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "assistant_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "assistant_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/clone`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" }),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([
+          { type: "remote_clone", requestId: expect.stringMatching(/^req_/), baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "assistant_1" },
+        ]);
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );

@@ -735,6 +735,40 @@ describe("remote control extension", () => {
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
   });
 
+  it("clones the active branch into a replacement session without returning draft text", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_clone" } }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const replacementCtx = createContext().ctx;
+    replacementCtx.sessionManager.getSessionId = () => "pi_clone";
+    replacementCtx.sessionManager.getSessionFile = () => "/tmp/clone.jsonl";
+    const fork = vi.fn(async (_entryId: string, options: { position?: "at"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
+      await options.withSession?.(replacementCtx);
+      return { cancelled: false };
+    });
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_clone",
+      requestId: "req_clone_1",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "http://127.0.0.1:17373/v1/tui/sessions", init: expect.objectContaining({ method: "POST", body: expect.objectContaining({ id: "sess_pi_clone", sessionFile: "/tmp/clone.jsonl" }) }) }),
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_clone_result", requestId: "req_clone_1", ok: true, newSession: expect.objectContaining({ id: "sess_pi_clone", isActive: true }) } } },
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_session_replaced", requestId: "req_clone_1", oldSessionId: "sess_pi_1", newSession: expect.objectContaining({ id: "sess_pi_clone", isActive: true }) } } },
+    ])));
+    expect(fork).toHaveBeenCalledWith("entry_leaf", { position: "at", withSession: expect.any(Function) });
+  });
+
   it("forks into a replacement session, preserves remote control, and returns draft text only to iOS", async () => {
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(

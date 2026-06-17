@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
+import type { DaemonConfig, RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -256,6 +256,11 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isRemoteCloneResultEvent(event)) {
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteSessionReplacedEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       options.activeSessions?.unregisterSession(sessionId);
@@ -368,6 +373,52 @@ async function handleHttpRequest(
       await options.sessionService?.promptSession?.(sessionId, body);
     }
     writeJson(response, 200, { accepted: true });
+    return;
+  }
+
+  const cloneMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/clone$/);
+  if (request.method === "POST" && cloneMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(cloneMatch[1] ?? "");
+    const requestId = nextRequestId();
+    const bodyRecord = (await readJsonBody(request)) as Record<string, unknown>;
+    const body = {
+      baseSnapshotVersion: typeof bodyRecord.baseSnapshotVersion === "string" ? bodyRecord.baseSnapshotVersion : "",
+      baseBranchVersion: typeof bodyRecord.baseBranchVersion === "string" ? bodyRecord.baseBranchVersion : "",
+      baseLeafId: bodyRecord.baseLeafId === null || typeof bodyRecord.baseLeafId === "string" ? bodyRecord.baseLeafId : null,
+    };
+    if (options.activeSessions) {
+      const state = options.activeSessions.getSessionState(sessionId, { messageLimit: 1 });
+      if (!state) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+      if (state.isStreaming) {
+        writeJson(response, 409, { error: "session_busy" });
+        return;
+      }
+      const treeResult = options.activeSessions.getTreeSnapshot(sessionId);
+      if (!treeResult.ok) {
+        writeJson(response, 409, { error: treeResult.error });
+        return;
+      }
+      if (treeResult.snapshot.stale === true
+        || treeResult.snapshot.snapshotVersion !== body.baseSnapshotVersion
+        || treeResult.snapshot.branchVersion !== body.baseBranchVersion
+        || treeResult.snapshot.leafId !== body.baseLeafId) {
+        writeJson(response, 409, { error: "tree_state_changed" });
+        return;
+      }
+      if (!options.activeSessions.enqueueCommand(sessionId, { type: "remote_clone", requestId, ...body })) {
+        writeJson(response, 409, { error: "session_not_active" });
+        return;
+      }
+    }
+    writeJson(response, 200, { accepted: true, requestId });
     return;
   }
 
@@ -705,6 +756,14 @@ function isRemoteForkResultEvent(event: unknown): event is RemoteForkResultEvent
   const record = event as Record<string, unknown>;
   if (record.type !== "remote_fork_result" || typeof record.requestId !== "string") return false;
   if (record.ok === true) return Boolean(record.newSession) && typeof record.editorText === "string";
+  return record.ok === false && typeof record.error === "string";
+}
+
+function isRemoteCloneResultEvent(event: unknown): event is RemoteCloneResultEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "remote_clone_result" || typeof record.requestId !== "string") return false;
+  if (record.ok === true) return Boolean(record.newSession) && record.editorText === undefined;
   return record.ok === false && typeof record.error === "string";
 }
 

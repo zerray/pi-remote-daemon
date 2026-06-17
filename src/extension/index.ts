@@ -3,7 +3,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
-import type { RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
+import type { RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
@@ -399,11 +399,54 @@ export function handleRemoteCommand(
   if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
   if (command.type === "remote_tree_navigate") handleRemoteTreeNavigateCommand(ctx, command, sessionId);
   if (command.type === "remote_fork") handleRemoteForkCommand(pi, ctx, command, sessionId);
+  if (command.type === "remote_clone") handleRemoteCloneCommand(pi, ctx, command, sessionId);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
   if (streamingBehavior) return { deliverAs: streamingBehavior };
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
+}
+
+function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_clone" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  if (!command.baseLeafId) {
+    void postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: "tree_state_changed" } satisfies RemoteCloneResultEvent).catch(() => undefined);
+    return;
+  }
+  void (async () => {
+    try {
+      let replacementSummary: unknown;
+      const result = await ctx.fork(command.baseLeafId!, {
+        position: "at",
+        withSession: async (replacementCtx) => {
+          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+            method: "POST",
+            headers: await tuiHeaders(),
+            body: JSON.stringify(registration),
+          });
+          const responseBody = asRecord(await response.json().catch(() => ({})));
+          replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+        },
+      });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteCloneResultEvent);
+        return;
+      }
+      const newSession = replacementSummary ?? {};
+      await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession } satisfies RemoteCloneResultEvent);
+      await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+    } catch (error) {
+      await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: cloneErrorCode(error) } satisfies RemoteCloneResultEvent);
+    }
+  })().catch(() => undefined);
+}
+
+function cloneErrorCode(error: unknown): Extract<RemoteCloneResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "cancelled";
 }
 
 function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {

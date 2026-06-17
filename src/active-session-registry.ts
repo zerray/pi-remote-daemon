@@ -42,7 +42,8 @@ export type RemoteTuiCommand =
   | { type: "remote_compact"; requestId: string }
   | { type: "remote_tree_refresh"; requestId: string }
   | { type: "remote_tree_navigate"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null; summaryMode: "none" | "default" }
-  | { type: "remote_fork"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null };
+  | { type: "remote_fork"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null }
+  | { type: "remote_clone"; requestId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null };
 
 export type ActiveSessionState = TranscriptPage & {
   session: ActiveSessionSummary;

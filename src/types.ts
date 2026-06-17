@@ -129,6 +129,10 @@ export type RemoteForkResultEvent =
   | { type: "remote_fork_result"; requestId: string; ok: true; newSession: unknown; editorText: string }
   | { type: "remote_fork_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "target_not_forkable" | "cancelled" | "aborted" };
 
+export type RemoteCloneResultEvent =
+  | { type: "remote_clone_result"; requestId: string; ok: true; newSession: unknown }
+  | { type: "remote_clone_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "cancelled" | "aborted" };
+
 export type RemoteSessionReplacedEvent = { type: "remote_session_replaced"; requestId: string; oldSessionId: string; newSession: unknown };
 
 export type RemoteCompactResultEvent =
@@ -141,6 +145,7 @@ export type TranscriptStreamEvent =
   | RemoteTreeSnapshotEvent
   | RemoteTreeNavigationResultEvent
   | RemoteForkResultEvent
+  | RemoteCloneResultEvent
   | RemoteSessionReplacedEvent
   | RemoteCompactResultEvent
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
