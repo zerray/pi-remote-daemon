@@ -409,7 +409,7 @@ function handleRemoteTreeNavigateCommand(ctx: Pick<ExtensionCommandContext, "nav
   if (!sessionId) return;
   void (async () => {
     try {
-      const result = await ctx.navigateTree(command.targetEntryId, { summarize: false });
+      const result = await ctx.navigateTree(command.targetEntryId, { summarize: command.summaryMode === "default" });
       const resultRecord = asRecord(result);
       if (result.cancelled) {
         await postTuiEvent(sessionId, { type: "remote_tree_navigation_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteTreeNavigationResultEvent);

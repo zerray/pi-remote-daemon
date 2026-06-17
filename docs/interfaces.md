@@ -411,7 +411,7 @@ Response:
 { "accepted": true, "requestId": "req_..." }
 ```
 
-Immediate errors include `409 session_not_active` and `409 session_busy` when the daemon already knows the owning session is unavailable or busy.
+Immediate errors include `409 session_not_active` and `409 session_busy` when the daemon already knows the owning session is unavailable or busy. Requests containing custom branch-summary focus fields such as `customInstructions` or `replaceInstructions` return `400 custom_summary_instructions_unsupported` in the MVP.
 
 `POST /v1/sessions/{sessionId}/fork`
 
@@ -635,7 +635,7 @@ The daemon forwards iOS requests to the owning TUI extension:
 { "type": "remote_abort", "requestId": "req_..." }
 { "type": "remote_compact", "requestId": "req_..." }
 { "type": "remote_tree_refresh", "requestId": "req_..." }
-{ "type": "remote_tree_navigate", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null", "summaryMode": "none" }
+{ "type": "remote_tree_navigate", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null", "summaryMode": "default" }
 { "type": "remote_fork", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
 { "type": "remote_clone", "requestId": "req_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
 ```

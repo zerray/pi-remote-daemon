@@ -977,6 +977,45 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("rejects custom branch-summary focus instructions for Remote Tree Navigation", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      treeSnapshot: {
+        sessionId: "sess_1",
+        leafId: "entry_1",
+        snapshotVersion: "treev_1",
+        branchVersion: "branchv_1",
+        entries: [{ id: "entry_1", parentId: null, type: "message", role: "assistant", title: "assistant", preview: "done", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/navigate`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ targetEntryId: "entry_1", baseSnapshotVersion: "treev_1", baseBranchVersion: "branchv_1", baseLeafId: "entry_1", summaryMode: "default", customInstructions: "focus on tests" }),
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: "custom_summary_instructions_unsupported" });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("rejects Remote Tree Navigation while the owning session is busy", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({

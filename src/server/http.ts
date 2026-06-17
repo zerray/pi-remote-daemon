@@ -368,12 +368,17 @@ async function handleHttpRequest(
 
     const sessionId = decodeURIComponent(treeNavigateMatch[1] ?? "");
     const requestId = nextRequestId();
-    const body = (await readJsonBody(request)) as {
-      targetEntryId: string;
-      baseSnapshotVersion: string;
-      baseBranchVersion: string;
-      baseLeafId: string | null;
-      summaryMode: "none";
+    const bodyRecord = (await readJsonBody(request)) as Record<string, unknown>;
+    if (bodyRecord.customInstructions !== undefined || bodyRecord.replaceInstructions !== undefined) {
+      writeJson(response, 400, { error: "custom_summary_instructions_unsupported" });
+      return;
+    }
+    const body = {
+      targetEntryId: typeof bodyRecord.targetEntryId === "string" ? bodyRecord.targetEntryId : "",
+      baseSnapshotVersion: typeof bodyRecord.baseSnapshotVersion === "string" ? bodyRecord.baseSnapshotVersion : "",
+      baseBranchVersion: typeof bodyRecord.baseBranchVersion === "string" ? bodyRecord.baseBranchVersion : "",
+      baseLeafId: bodyRecord.baseLeafId === null || typeof bodyRecord.baseLeafId === "string" ? bodyRecord.baseLeafId : null,
+      summaryMode: bodyRecord.summaryMode === "default" ? "default" as const : "none" as const,
     };
     if (options.activeSessions) {
       const state = options.activeSessions.getSessionState(sessionId, { messageLimit: 1 });

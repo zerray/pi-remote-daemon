@@ -735,6 +735,39 @@ describe("remote control extension", () => {
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
   });
 
+  it("uses Pi default branch summarization for default-summary Remote Tree Navigation", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn(async () => ({ cancelled: false }));
+    ctx.sessionManager.getLeafId = () => "entry_target";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_target", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: "target" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+      type: "remote_tree_navigate",
+      requestId: "req_nav_summary",
+      targetEntryId: "entry_target",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_old",
+      summaryMode: "default",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: expect.objectContaining({ body: expect.objectContaining({ type: "remote_tree_navigation_result", requestId: "req_nav_summary", ok: true }) }),
+    })));
+    expect(navigateTree).toHaveBeenCalledWith("entry_target", { summarize: true });
+  });
+
   it("navigates the live TUI tree and posts a Remote Tree Navigation result", async () => {
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(
@@ -775,6 +808,43 @@ describe("remote control extension", () => {
       },
     }));
     expect(navigateTree).toHaveBeenCalledWith("entry_user", { summarize: false });
+  });
+
+  it("posts stable Remote Tree Navigation error codes for cancelled, aborted, and failed summaries", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn()
+      .mockResolvedValueOnce({ cancelled: true })
+      .mockResolvedValueOnce({ cancelled: true, aborted: true })
+      .mockRejectedValueOnce(new Error("summary model failed"));
+
+    for (const requestId of ["req_cancel", "req_abort", "req_fail"]) {
+      handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+        type: "remote_tree_navigate",
+        requestId,
+        targetEntryId: "entry_target",
+        baseSnapshotVersion: "treev_1",
+        baseBranchVersion: "branchv_1",
+        baseLeafId: "entry_old",
+        summaryMode: "default",
+      }, "sess_pi_1");
+    }
+
+    await vi.waitFor(() => {
+      const bodies = fetchCalls.map((call) => (call as { init: { body: unknown } }).init.body);
+      expect(bodies).toEqual(expect.arrayContaining([
+        { type: "remote_tree_navigation_result", requestId: "req_cancel", ok: false, error: "cancelled" },
+        { type: "remote_tree_navigation_result", requestId: "req_abort", ok: false, error: "aborted" },
+        { type: "remote_tree_navigation_result", requestId: "req_fail", ok: false, error: "summarization_failed" },
+      ]));
+    });
   });
 
   it("posts a fresh Tree Snapshot when handling remote Tree Refresh", async () => {
