@@ -708,6 +708,40 @@ describe("remote control extension", () => {
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
   });
 
+  it("posts a fresh Tree Snapshot when handling remote Tree Refresh", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    ctx.sessionManager.getLeafId = () => "entry_1";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "refresh me" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn() } as never, { type: "remote_tree_refresh", requestId: "req_tree_1" }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: {
+        method: "POST",
+        body: {
+          type: "remote_tree_snapshot",
+          requestId: "req_tree_1",
+          snapshot: expect.objectContaining({
+            sessionId: "sess_pi_1",
+            leafId: "entry_1",
+            entries: [expect.objectContaining({ id: "entry_1", preview: "refresh me", isCurrentLeaf: true })],
+          }),
+        },
+      },
+    }));
+  });
+
   it("posts remote compact success and failure results from TUI callbacks", async () => {
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(

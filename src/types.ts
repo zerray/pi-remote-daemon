@@ -119,6 +119,8 @@ export type RuntimeStatus = {
   updatedAt: IsoTimestamp;
 };
 
+export type RemoteTreeSnapshotEvent = { type: "remote_tree_snapshot"; requestId?: string; snapshot: TreeSnapshot };
+
 export type RemoteCompactResultEvent =
   | { type: "remote_compact_result"; requestId: string; ok: true; summary: string; firstKeptEntryId: string; tokensBefore: number }
   | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
@@ -126,6 +128,7 @@ export type RemoteCompactResultEvent =
 export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
   | { type: "runtime_status"; status: RuntimeStatus }
+  | RemoteTreeSnapshotEvent
   | RemoteCompactResultEvent
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
   | { type: "turn_end"; turnIndex: number }

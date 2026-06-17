@@ -349,6 +349,74 @@ describe("daemon HTTP server", () => {
     );
   });
 
+  it("stores and broadcasts remote Tree Snapshots from active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    const snapshot = {
+      sessionId: "sess_1",
+      leafId: "entry_1",
+      snapshotVersion: "treev_2",
+      branchVersion: "branchv_2",
+      entries: [
+        {
+          id: "entry_1",
+          parentId: null,
+          type: "message" as const,
+          role: "user" as const,
+          title: "user",
+          preview: "fresh tree",
+          timestamp: "2026-05-09T00:00:00.000Z",
+          isCurrentLeaf: true,
+          isOnActiveBranch: true,
+          isForkable: true,
+          navigationBehavior: "edit_prompt" as const,
+        },
+      ],
+      defaultFilter: "default" as const,
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+      generatedAt: "2026-05-09T00:00:01.000Z",
+    };
+
+    await withServer(
+      async (baseUrl) => {
+        const wsUrl = baseUrl.replace("http://", "ws://");
+        const webSocket = new WebSocket(`${wsUrl}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({ type: "session_state", state: expect.any(Object) })));
+
+        const event = { type: "remote_tree_snapshot", requestId: "req_tree_1", snapshot };
+        const eventResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        expect(eventResponse.status).toBe(200);
+        await vi.waitFor(() => expect(messages).toContainEqual(event));
+
+        const treeResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/tree`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        expect(treeResponse.status).toBe(200);
+        await expect(treeResponse.json()).resolves.toEqual({ snapshot });
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
   it("broadcasts remote compact results to iOS WebSocket subscribers", async () => {
     const activeSessions = createActiveSessionRegistry();
     activeSessions.registerSession({
@@ -593,6 +661,51 @@ describe("daemon HTTP server", () => {
         await expect(response.json()).resolves.toEqual({ snapshot });
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("queues Tree Refresh for active TUI sessions", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/sess_1/tree/refresh`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([
+          { type: "remote_tree_refresh", requestId: expect.stringMatching(/^req_/) },
+        ]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("rejects Tree Refresh for inactive TUI sessions", async () => {
+    await withServer(
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/sessions/missing/tree/refresh`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: "session_not_active" });
+      },
+      { activeSessions: createActiveSessionRegistry(), authenticateToken: (token) => token === "test-token" },
     );
   });
 

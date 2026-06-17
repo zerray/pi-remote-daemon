@@ -39,7 +39,8 @@ export type ActiveSessionSummary = {
 export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
   | { type: "remote_abort"; requestId: string }
-  | { type: "remote_compact"; requestId: string };
+  | { type: "remote_compact"; requestId: string }
+  | { type: "remote_tree_refresh"; requestId: string };
 
 export type ActiveSessionState = TranscriptPage & {
   session: ActiveSessionSummary;
@@ -72,6 +73,7 @@ export type ActiveSessionRegistry = {
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
   getTreeSnapshot(sessionId: string): ActiveSessionTreeSnapshotResult;
+  updateTreeSnapshot(sessionId: string, snapshot: TreeSnapshot): boolean;
   updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
   updateSessionActivity(sessionId: string, activity: { isStreaming: boolean; pendingMessageCount?: number }): boolean;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
@@ -215,6 +217,15 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
         ok: true,
         snapshot: session.treeStateStale ? { ...session.treeSnapshot, stale: true } : session.treeSnapshot,
       };
+    },
+
+    updateTreeSnapshot(sessionId, snapshot) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      session.treeSnapshot = snapshot;
+      session.treeStateStale = false;
+      return true;
     },
 
     updateRuntimeStatus(sessionId, status) {

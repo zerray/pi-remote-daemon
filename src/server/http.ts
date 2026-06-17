@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RemoteCompactResultEvent, RuntimeStatus } from "../types.js";
+import type { DaemonConfig, RemoteCompactResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -232,6 +232,12 @@ async function handleHttpRequest(
       writeJson(response, 200, { accepted: true });
       return;
     }
+    if (isRemoteTreeSnapshotEvent(event)) {
+      options.activeSessions?.updateTreeSnapshot(sessionId, event.snapshot);
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRemoteCompactResultEvent(event)) {
       streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, event));
       writeJson(response, 200, { accepted: true });
@@ -337,6 +343,23 @@ async function handleHttpRequest(
       await options.sessionService?.promptSession?.(sessionId, body);
     }
     writeJson(response, 200, { accepted: true });
+    return;
+  }
+
+  const treeRefreshMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/tree\/refresh$/);
+  if (request.method === "POST" && treeRefreshMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const sessionId = decodeURIComponent(treeRefreshMatch[1] ?? "");
+    const requestId = nextRequestId();
+    if (options.activeSessions && !options.activeSessions.enqueueCommand(sessionId, { type: "remote_tree_refresh", requestId })) {
+      writeJson(response, 409, { error: "session_not_active" });
+      return;
+    }
+    writeJson(response, 200, { accepted: true, requestId });
     return;
   }
 
@@ -502,6 +525,21 @@ function isSessionNameEvent(event: unknown): event is { type: "session_name"; na
 
 function isAgentLifecycleEvent(event: unknown): event is { type: "agent_start" | "agent_end" } {
   return Boolean(event && typeof event === "object" && ((event as { type?: unknown }).type === "agent_start" || (event as { type?: unknown }).type === "agent_end"));
+}
+
+function isRemoteTreeSnapshotEvent(event: unknown): event is RemoteTreeSnapshotEvent {
+  if (!event || typeof event !== "object") return false;
+  const record = event as Record<string, unknown>;
+  const snapshot = record.snapshot as Record<string, unknown> | undefined;
+  return record.type === "remote_tree_snapshot"
+    && (record.requestId === undefined || typeof record.requestId === "string")
+    && Boolean(snapshot)
+    && typeof snapshot === "object"
+    && typeof snapshot.sessionId === "string"
+    && (snapshot.leafId === null || typeof snapshot.leafId === "string")
+    && typeof snapshot.snapshotVersion === "string"
+    && typeof snapshot.branchVersion === "string"
+    && Array.isArray(snapshot.entries);
 }
 
 function isRemoteCompactResultEvent(event: unknown): event is RemoteCompactResultEvent {

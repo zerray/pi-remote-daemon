@@ -366,18 +366,31 @@ function disconnectLocalSession(
   ctx.ui.notify("Remote control disconnected; run /remote-control to re-enable", "warning");
 }
 
-export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle">, command: RemoteTuiCommand, sessionId?: string): void {
+export function handleRemoteCommand(
+  pi: Pick<ExtensionAPI, "sendUserMessage">,
+  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle" | "sessionManager">,
+  command: RemoteTuiCommand,
+  sessionId?: string,
+): void {
   if (command.type === "remote_prompt") {
     pi.sendUserMessage(command.text, remotePromptDeliveryOptions(ctx, command.streamingBehavior));
     return;
   }
   if (command.type === "remote_abort") ctx.abort();
   if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
   if (streamingBehavior) return { deliverAs: streamingBehavior };
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
+}
+
+function handleRemoteTreeRefreshCommand(ctx: Pick<ExtensionCommandContext, "sessionManager">, requestId: string, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  const snapshot = treeSnapshotForContext({ sessionManager: ctx.sessionManager } as ExtensionCommandContext);
+  if (!snapshot) return;
+  void postTuiEvent(sessionId, { type: "remote_tree_snapshot", requestId, snapshot }).catch(() => undefined);
 }
 
 function handleRemoteCompactCommand(ctx: Pick<ExtensionCommandContext, "compact">, requestId: string, sessionId: string | undefined): void {
