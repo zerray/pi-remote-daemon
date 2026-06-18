@@ -375,7 +375,7 @@ Response:
 }
 ```
 
-Tree snapshots contain the full reduced tree as a flat entry list. iOS applies filters and search locally. `snapshotVersion` and `branchVersion` are opaque strings; clients compare them for equality and must not infer ordering. Entry previews are capped to about 500 characters and include `previewTruncated: true` when clipped. Labels are projected onto their target entries; label entries may also appear as entries when clients use the `all` filter. Snapshots marked `stale: true` are display-only; tree navigation, fork, and clone requests based on stale snapshots are rejected with `tree_state_changed` until a fresh snapshot is available.
+Tree snapshots contain the full reduced tree as a flat entry list. Assistant messages with no nonblank text content are omitted unless they are the current leaf or ended with an error/abort stop reason, matching Pi TUI `/tree` visibility. iOS applies the advertised filters and search locally to the remaining entries. `snapshotVersion` and `branchVersion` are opaque strings; clients compare them for equality and must not infer ordering. Entry previews are capped to about 500 characters and include `previewTruncated: true` when clipped. Labels are projected onto their target entries; label entries may also appear as entries when clients use the `all` filter. Snapshots marked `stale: true` are display-only; tree navigation, fork, and clone requests based on stale snapshots are rejected with `tree_state_changed` until a fresh snapshot is available.
 
 `POST /v1/sessions/{sessionId}/tree/refresh`
 

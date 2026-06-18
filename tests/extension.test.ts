@@ -236,6 +236,43 @@ describe("remote control extension", () => {
     expect(snapshot.entries.find((entry) => entry.id === "user_1")).not.toHaveProperty("message");
   });
 
+  it("omits non-current assistant tree entries with no text content from reduced Tree Snapshots", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    ctx.sessionManager.getLeafId = () => "assistant_leaf_tool_only";
+    ctx.sessionManager.getTree = () => [
+      {
+        entry: { type: "message", id: "user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "run checks" } },
+        children: [
+          { entry: { type: "message", id: "assistant_text", parentId: "user_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Running checks." }] } }, children: [] },
+          { entry: { type: "message", id: "assistant_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "npm test" } }] }, stopReason: "toolUse" }, children: [] },
+          { entry: { type: "message", id: "assistant_thinking_only", parentId: "user_1", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Checking" }] } }, children: [] },
+          { entry: { type: "message", id: "assistant_error_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "bad" } }] }, stopReason: "error" }, children: [] },
+          { entry: { type: "message", id: "assistant_leaf_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:05.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_3", name: "bash", arguments: { command: "still running" } }] }, stopReason: "toolUse" }, children: [] },
+        ],
+      },
+    ];
+    let registrationBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/tui/sessions")) registrationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    const snapshot = registrationBody?.treeSnapshot as { entries: Array<Record<string, unknown>> };
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual([
+      "user_1",
+      "assistant_text",
+      "assistant_error_tool_only",
+      "assistant_leaf_tool_only",
+    ]);
+  });
+
   it("reports startup readiness failure without throwing", async () => {
     const commands: Registered[] = [];
     const { ctx, notifications } = createContext();

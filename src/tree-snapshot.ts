@@ -18,7 +18,7 @@ export function buildTreeSnapshot(input: {
   leafId: string | null;
   generatedAt?: string;
 }): TreeSnapshot {
-  const rawEntries = flattenTree(input.roots);
+  const rawEntries = flattenTree(input.roots, input.leafId);
   const parentById = new Map<string, string | null>();
   for (const rawEntry of rawEntries) parentById.set(rawEntry.id, rawEntry.parentId);
   const activeBranchIds = activeBranchPath(input.leafId, parentById);
@@ -45,16 +45,21 @@ type RawTreeEntry = {
   label?: string;
 };
 
-function flattenTree(roots: SessionTreeNodeInput[]): RawTreeEntry[] {
+function flattenTree(roots: SessionTreeNodeInput[], leafId: string | null): RawTreeEntry[] {
   const entries: RawTreeEntry[] = [];
-  const visit = (node: SessionTreeNodeInput) => {
+  const visit = (node: SessionTreeNodeInput, parentOverride?: string | null) => {
     const source = asRecord(node.entry);
     const id = readString(source.id);
     if (!id) return;
+    const parentId = parentOverride !== undefined ? parentOverride : readString(source.parentId) ?? null;
+    if (isHiddenAssistantMessageEntry(source, leafId)) {
+      for (const child of node.children ?? []) visit(child, parentId);
+      return;
+    }
     entries.push({
       source,
       id,
-      parentId: readString(source.parentId) ?? null,
+      parentId,
       timestamp: readString(source.timestamp) ?? new Date(0).toISOString(),
       label: node.label,
     });
@@ -62,6 +67,26 @@ function flattenTree(roots: SessionTreeNodeInput[]): RawTreeEntry[] {
   };
   for (const root of roots) visit(root);
   return entries;
+}
+
+function isHiddenAssistantMessageEntry(source: Record<string, unknown>, leafId: string | null): boolean {
+  if (source.type !== "message") return false;
+  const id = readString(source.id);
+  if (id && id === leafId) return false;
+  const message = asRecord(source.message);
+  if (message.role !== "assistant") return false;
+  if (hasTextContent(message.content)) return false;
+  const stopReason = readString(message.stopReason) ?? readString(source.stopReason);
+  return !(stopReason && stopReason !== "stop" && stopReason !== "toolUse");
+}
+
+function hasTextContent(content: unknown): boolean {
+  if (typeof content === "string") return content.trim().length > 0;
+  if (!Array.isArray(content)) return false;
+  return content.some((item) => {
+    const record = asRecord(item);
+    return record.type === "text" && (readString(record.text)?.trim().length ?? 0) > 0;
+  });
 }
 
 function activeBranchPath(leafId: string | null, parentById: Map<string, string | null>): Set<string> {
