@@ -228,6 +228,7 @@ type TreeEntry = {
   type: "message" | "custom_message" | "branch_summary" | "compaction" | "model_change" | "thinking_level_change" | "label" | "session_info" | "custom" | "other";
   role?: "user" | "assistant" | "toolResult" | "system" | "custom";
   customType?: string;
+  toolName?: string;
   title: string;
   preview: string;
   previewTruncated?: boolean;

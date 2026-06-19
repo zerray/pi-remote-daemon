@@ -123,6 +123,8 @@ function toTreeEntry(rawEntry: RawTreeEntry, leafId: string | null, activeBranch
   };
   if (role) result.role = role;
   if (customType) result.customType = customType;
+  const toolName = role === "toolResult" ? readString(message.toolName) : undefined;
+  if (toolName) result.toolName = toolName;
   if (rawEntry.label) result.label = rawEntry.label;
   if (preview.truncated) result.previewTruncated = true;
   return result;

@@ -224,6 +224,7 @@ type TreeEntry = {
   type: "message" | "custom_message" | "branch_summary" | "compaction" | "model_change" | "thinking_level_change" | "label" | "session_info" | "custom" | "other";
   role?: "user" | "assistant" | "toolResult" | "system" | "custom";
   customType?: string;
+  toolName?: string;
   title: string;
   preview: string;
   previewTruncated?: boolean;
@@ -238,7 +239,7 @@ type TreeEntry = {
 
 `TreeSnapshot` is process state reported by the owning TUI extension. It is a full reduced tree represented as a flat `entries` array with parent links, not raw Pi session entries. `snapshotVersion` changes when full tree content changes, including labels, branch summaries, compactions, and session metadata that affects the tree display. `branchVersion` changes when the active branch position changes, including leaf changes after ordinary chat messages. Both version values are opaque strings; clients compare them for equality and must not infer ordering. `leafId` and `branchVersion` are the authority for active-branch transcript reads. A stale snapshot may be shown to iOS for display, but tree navigation, fork, and clone actions based on it are rejected until refresh.
 
-`TreeEntry.preview` is capped to about 500 characters and marked with `previewTruncated` when clipped. `isOnActiveBranch` marks the root-to-`leafId` path. `isForkable` is true only for user-message entries. `navigationBehavior` is `"edit_prompt"` for user and custom-message entries that return prompt text on navigation, and `"navigate"` for entries that become the new leaf directly. Labels are projected onto their target entries; label entries may also appear as entries for clients showing all entries.
+`TreeEntry.preview` is capped to about 500 characters and marked with `previewTruncated` when clipped. Tool-result entries carry `toolName` when known so clients can label compact tool-result rows. `isOnActiveBranch` marks the root-to-`leafId` path. `isForkable` is true only for user-message entries. `navigationBehavior` is `"edit_prompt"` for user and custom-message entries that return prompt text on navigation, and `"navigate"` for entries that become the new leaf directly. Labels are projected onto their target entries; label entries may also appear as entries for clients showing all entries.
 
 ## Session snapshot
 
