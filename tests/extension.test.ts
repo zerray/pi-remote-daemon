@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import remoteControlExtension, { collectRuntimeStatus, enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
+import remoteControlExtension, { __resetRemoteControlExtensionStateForTests, collectRuntimeStatus, enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
   name: string;
@@ -90,6 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetRemoteControlExtensionStateForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -844,6 +845,58 @@ describe("remote control extension", () => {
     expect(fork).toHaveBeenCalledWith("entry_user", { position: "before", withSession: expect.any(Function) });
     expect(setEditorText).toHaveBeenCalledWith("");
     expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("transfers local remote-control state to the replacement extension instance after Remote Fork", async () => {
+    const oldExtension = createFakePi();
+    const oldContext = createContext();
+    const replacementExtension = createFakePi();
+    const replacementContext = createContext();
+    replacementContext.ctx.sessionManager.getSessionId = () => "pi_fork";
+    replacementContext.ctx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    const setEditorText = vi.fn();
+    replacementContext.ctx.ui.setEditorText = setEditorText as never;
+    const fetchCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_fork" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(oldExtension.pi as never);
+    await oldExtension.commands.find((command) => command.name === "remote-control")!.handler("", oldContext.ctx);
+
+    const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementContext.ctx) => Promise<void> }) => {
+      await oldExtension.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "fork", targetSessionFile: "/tmp/fork.jsonl" }, oldContext.ctx);
+      remoteControlExtension(replacementExtension.pi as never);
+      await options.withSession?.(replacementContext.ctx);
+      return { cancelled: false, selectedText: "selected prompt" };
+    });
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...oldContext.ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_fork",
+      requestId: "req_fork_1",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(replacementContext.statuses).toContainEqual({ key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" }));
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_session_replaced" }),
+    })));
+    const replacementEventIndex = fetchCalls.findIndex((call) => call.url === "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" && (call.body as { type?: string } | undefined)?.type === "remote_session_replaced");
+    const oldDeleteIndex = fetchCalls.findIndex((call) => call.url === "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1" && call.method === "DELETE");
+    expect(oldDeleteIndex).toBeGreaterThan(replacementEventIndex);
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_fork/commands",
+      method: "GET",
+      body: undefined,
+    }));
+    await replacementExtension.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, replacementContext.ctx);
   });
 
   it("uses Pi default branch summarization for default-summary Remote Tree Navigation", async () => {

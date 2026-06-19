@@ -13,12 +13,25 @@ import { createTranscriptEventCanonicalizer } from "./transcript-event-canonical
 
 export { collectRuntimeStatus } from "../runtime-status.js";
 
+const activeSessionIds = new Set<string>();
+const pollTimers = new Map<string, NodeJS.Timeout>();
+const runtimeStatusCache = new Map<string, string>();
+const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
+const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
+const remoteReplacementInFlightSessionIds = new Set<string>();
+
+export function __resetRemoteControlExtensionStateForTests(): void {
+  for (const timer of pollTimers.values()) clearInterval(timer);
+  for (const timer of transcriptRetryTimers.values()) clearTimeout(timer);
+  activeSessionIds.clear();
+  pollTimers.clear();
+  runtimeStatusCache.clear();
+  transcriptEventCanonicalizers.clear();
+  transcriptRetryTimers.clear();
+  remoteReplacementInFlightSessionIds.clear();
+}
+
 export default function remoteControlExtension(pi: ExtensionAPI): void {
-  const activeSessionIds = new Set<string>();
-  const pollTimers = new Map<string, NodeJS.Timeout>();
-  const runtimeStatusCache = new Map<string, string>();
-  const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
-  const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) {
@@ -41,9 +54,10 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
     transcriptRetryTimers.delete(sessionId);
     deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
-  const cleanup = async (ctx: ExtensionContext) => {
+  const cleanup = async (_event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     resetLocalState(ctx);
+    if (remoteReplacementInFlightSessionIds.has(sessionId)) return;
     await unregisterTuiSession(sessionId).catch(() => undefined);
   };
 
@@ -119,11 +133,11 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
 function registerEventForwarders(
   pi: ExtensionAPI,
   forward: (event: unknown, ctx: ExtensionContext) => void,
-  cleanup: (ctx: ExtensionContext) => void | Promise<void>,
+  cleanup: (event: unknown, ctx: ExtensionContext) => void | Promise<void>,
   resetLocalState: (ctx: ExtensionContext) => void,
 ): void {
   pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
-  pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
+  pi.on("session_shutdown", (event, ctx) => cleanup(event, ctx));
   pi.on("session_info_changed" as never, forward as never);
   pi.on("turn_start", forward);
   pi.on("turn_end", forward);
@@ -232,7 +246,7 @@ async function unregisterTuiSession(sessionId: string): Promise<void> {
 }
 
 function activateLocalSession(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -325,7 +339,7 @@ function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string 
 }
 
 async function pollRemoteCommands(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -341,11 +355,11 @@ async function pollRemoteCommands(
   }
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
-  for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command, sessionId);
+  for (const command of body.commands ?? []) handleRemoteCommand(pi as Pick<ExtensionAPI, "sendUserMessage">, ctx, command, sessionId);
 }
 
 async function reRegisterTuiSessionAfterHeartbeatMiss(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -407,6 +421,12 @@ function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle"
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
 }
 
+function preserveRemoteControlForReplacement(pi: unknown, replacementCtx: ExtensionCommandContext): void {
+  const replacementSessionId = daemonSessionId(replacementCtx);
+  runtimeStatusCache.set(replacementSessionId, comparableRuntimeStatus(collectRuntimeStatus(pi, replacementCtx)));
+  activateLocalSession(pi, replacementCtx, replacementSessionId, activeSessionIds, pollTimers, runtimeStatusCache);
+}
+
 function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_clone" }>, sessionId: string | undefined): void {
   if (!sessionId) return;
   if (!command.baseLeafId) {
@@ -414,11 +434,14 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
     return;
   }
   void (async () => {
+    let replacementSessionStarted = false;
+    remoteReplacementInFlightSessionIds.add(sessionId);
     try {
       let replacementSummary: unknown;
       const result = await ctx.fork(command.baseLeafId!, {
         position: "at",
         withSession: async (replacementCtx) => {
+          replacementSessionStarted = true;
           const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
           const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
             method: "POST",
@@ -426,7 +449,9 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
             body: JSON.stringify(registration),
           });
           const responseBody = asRecord(await response.json().catch(() => ({})));
+          if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
           replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+          preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
         },
       });
       const resultRecord = asRecord(result);
@@ -437,8 +462,12 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
       const newSession = replacementSummary ?? {};
       await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession } satisfies RemoteCloneResultEvent);
       await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      await unregisterTuiSession(sessionId).catch(() => undefined);
     } catch (error) {
       await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: cloneErrorCode(error) } satisfies RemoteCloneResultEvent);
+      if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
+    } finally {
+      remoteReplacementInFlightSessionIds.delete(sessionId);
     }
   })().catch(() => undefined);
 }
@@ -452,11 +481,14 @@ function cloneErrorCode(error: unknown): Extract<RemoteCloneResultEvent, { ok: f
 function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {
   if (!sessionId) return;
   void (async () => {
+    let replacementSessionStarted = false;
+    remoteReplacementInFlightSessionIds.add(sessionId);
     try {
       let replacementSummary: unknown;
       const result = await ctx.fork(command.targetEntryId, {
         position: "before",
         withSession: async (replacementCtx) => {
+          replacementSessionStarted = true;
           replacementCtx.ui.setEditorText("");
           const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
           const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
@@ -465,7 +497,9 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
             body: JSON.stringify(registration),
           });
           const responseBody = asRecord(await response.json().catch(() => ({})));
+          if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
           replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+          preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
         },
       });
       const resultRecord = asRecord(result);
@@ -477,8 +511,12 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
       const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? "";
       await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
       await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      await unregisterTuiSession(sessionId).catch(() => undefined);
     } catch (error) {
       await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: forkErrorCode(error) } satisfies RemoteForkResultEvent);
+      if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
+    } finally {
+      remoteReplacementInFlightSessionIds.delete(sessionId);
     }
   })().catch(() => undefined);
 }
