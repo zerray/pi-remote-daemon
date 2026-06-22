@@ -478,13 +478,28 @@ function cloneErrorCode(error: unknown): Extract<RemoteCloneResultEvent, { ok: f
   return "cancelled";
 }
 
-function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {
+function forkEditorTextForTargetEntry(entry: unknown): string {
+  const entryRecord = asRecord(entry);
+  if (entryRecord.type !== "message") return "";
+  const message = asRecord(entryRecord.message);
+  if (message.role !== "user") return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => asRecord(part).type === "text")
+    .map((part) => readString(asRecord(part).text) ?? "")
+    .join("");
+}
+
+function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork" | "sessionManager">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {
   if (!sessionId) return;
   void (async () => {
     let replacementSessionStarted = false;
     remoteReplacementInFlightSessionIds.add(sessionId);
     try {
       let replacementSummary: unknown;
+      const targetEditorText = forkEditorTextForTargetEntry(ctx.sessionManager.getEntry(command.targetEntryId));
       const result = await ctx.fork(command.targetEntryId, {
         position: "before",
         withSession: async (replacementCtx) => {
@@ -508,7 +523,7 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
         return;
       }
       const newSession = replacementSummary ?? {};
-      const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? "";
+      const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? targetEditorText;
       await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
       await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
       await unregisterTuiSession(sessionId).catch(() => undefined);

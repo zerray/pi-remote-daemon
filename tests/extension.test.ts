@@ -817,6 +817,9 @@ describe("remote control extension", () => {
       }),
     );
     const { ctx } = createContext();
+    ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", parentId: "entry_parent", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "selected " }, { type: "image", source: "ignored" }, { type: "text", text: "prompt" }] } }
+      : undefined;
     const replacementCtx = createContext().ctx;
     replacementCtx.sessionManager.getSessionId = () => "pi_fork";
     replacementCtx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
@@ -824,7 +827,7 @@ describe("remote control extension", () => {
     replacementCtx.ui.setEditorText = setEditorText as never;
     const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
       await options.withSession?.(replacementCtx);
-      return { cancelled: false, selectedText: "selected prompt" };
+      return { cancelled: false };
     });
     const sendUserMessage = vi.fn();
 
@@ -850,6 +853,9 @@ describe("remote control extension", () => {
   it("transfers local remote-control state to the replacement extension instance after Remote Fork", async () => {
     const oldExtension = createFakePi();
     const oldContext = createContext();
+    oldContext.ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", parentId: "entry_parent", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "selected prompt" } }
+      : undefined;
     const replacementExtension = createFakePi();
     const replacementContext = createContext();
     replacementContext.ctx.sessionManager.getSessionId = () => "pi_fork";
