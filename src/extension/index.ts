@@ -435,6 +435,7 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
   }
   void (async () => {
     let replacementSessionStarted = false;
+    let replacementNotified = false;
     remoteReplacementInFlightSessionIds.add(sessionId);
     try {
       let replacementSummary: unknown;
@@ -452,19 +453,24 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
           if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
           replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
           preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
+          await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession: replacementSummary } satisfies RemoteCloneResultEvent);
+          await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession: replacementSummary } satisfies RemoteSessionReplacedEvent);
+          replacementNotified = true;
         },
       });
       const resultRecord = asRecord(result);
       if (result.cancelled) {
-        await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteCloneResultEvent);
+        if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteCloneResultEvent);
         return;
       }
       const newSession = replacementSummary ?? {};
-      await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession } satisfies RemoteCloneResultEvent);
-      await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      if (!replacementNotified) {
+        await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession } satisfies RemoteCloneResultEvent);
+        await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      }
       await unregisterTuiSession(sessionId).catch(() => undefined);
     } catch (error) {
-      await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: cloneErrorCode(error) } satisfies RemoteCloneResultEvent);
+      if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: cloneErrorCode(error) } satisfies RemoteCloneResultEvent);
       if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
     } finally {
       remoteReplacementInFlightSessionIds.delete(sessionId);
@@ -496,6 +502,7 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
   if (!sessionId) return;
   void (async () => {
     let replacementSessionStarted = false;
+    let replacementNotified = false;
     remoteReplacementInFlightSessionIds.add(sessionId);
     try {
       let replacementSummary: unknown;
@@ -515,20 +522,25 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
           if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
           replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
           preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
+          await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession: replacementSummary, editorText: targetEditorText } satisfies RemoteForkResultEvent);
+          await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession: replacementSummary } satisfies RemoteSessionReplacedEvent);
+          replacementNotified = true;
         },
       });
       const resultRecord = asRecord(result);
       if (result.cancelled) {
-        await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteForkResultEvent);
+        if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteForkResultEvent);
         return;
       }
       const newSession = replacementSummary ?? {};
       const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? targetEditorText;
-      await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
-      await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      if (!replacementNotified) {
+        await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
+        await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      }
       await unregisterTuiSession(sessionId).catch(() => undefined);
     } catch (error) {
-      await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: forkErrorCode(error) } satisfies RemoteForkResultEvent);
+      if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: forkErrorCode(error) } satisfies RemoteForkResultEvent);
       if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
     } finally {
       remoteReplacementInFlightSessionIds.delete(sessionId);

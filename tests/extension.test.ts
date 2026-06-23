@@ -850,6 +850,51 @@ describe("remote control extension", () => {
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("notifies iOS as soon as the replacement session is registered during Remote Fork", async () => {
+    const fetchCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_fork" } }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", message: { role: "user", content: "selected prompt" } }
+      : undefined;
+    const replacementCtx = createContext().ctx;
+    replacementCtx.sessionManager.getSessionId = () => "pi_fork";
+    replacementCtx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    replacementCtx.ui.setEditorText = vi.fn() as never;
+    let finishFork!: () => void;
+    const forkFinished = new Promise<void>((resolve) => { finishFork = resolve; });
+    const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
+      await options.withSession?.(replacementCtx);
+      await forkFinished;
+      return { cancelled: false, selectedText: "late selected prompt" };
+    });
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_fork",
+      requestId: "req_fork_early",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_fork_result", requestId: "req_fork_early", ok: true, editorText: "selected prompt" }),
+    })));
+    expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_session_replaced", requestId: "req_fork_early" }),
+    }));
+    finishFork();
+  });
+
   it("transfers local remote-control state to the replacement extension instance after Remote Fork", async () => {
     const oldExtension = createFakePi();
     const oldContext = createContext();
