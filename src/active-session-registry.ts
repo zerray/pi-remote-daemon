@@ -234,6 +234,7 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       const session = sessions.get(sessionId);
       if (!session) return false;
       session.treeSnapshot = snapshot;
+      session.treeState = undefined;
       session.treeStateStale = false;
       return true;
     },

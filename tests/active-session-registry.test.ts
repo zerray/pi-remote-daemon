@@ -137,6 +137,51 @@ describe("active TUI session registry", () => {
     }
   });
 
+  it("uses refreshed tree snapshots to recover from stale active-branch leaves", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-remote-control-registry-stale-leaf-"));
+    const sessionFile = join(root, "session.jsonl");
+    const registry = createActiveSessionRegistry();
+    try {
+      await writeFile(sessionFile, [
+        JSON.stringify({ type: "message", id: "user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "run checks" } }),
+        JSON.stringify({ type: "message", id: "tool_result", parentId: "user_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "toolResult", toolCallId: "call_1", toolName: "bash", content: "ok" } }),
+        JSON.stringify({ type: "message", id: "assistant_final", parentId: "tool_result", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: "finished" } }),
+      ].join("\n"));
+      registry.registerSession({
+        id: "sess_1",
+        piSessionId: "pi_1",
+        project: { id: "proj_1", name: "Example", path: "/repo/example" },
+        sessionFile,
+        pid: 1234,
+        messageCount: 3,
+        isStreaming: false,
+        updatedAt: "2026-05-09T00:00:00.000Z",
+      });
+
+      expect(registry.updateTreeState("sess_1", { leafId: "tool_result", branchVersion: "branchv_stale" })).toBe(true);
+      expect(registry.getSessionState("sess_1")?.messages.map((message) => message.id)).toEqual(["user_1", "tool_result"]);
+
+      expect(registry.updateTreeSnapshot("sess_1", {
+        sessionId: "sess_1",
+        leafId: "assistant_final",
+        snapshotVersion: "treev_2",
+        branchVersion: "branchv_fresh",
+        entries: [
+          { id: "user_1", parentId: null, type: "message", role: "user", title: "user", preview: "run checks", timestamp: "2026-05-09T00:00:00.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" },
+          { id: "tool_result", parentId: "user_1", type: "message", role: "toolResult", title: "toolResult", preview: "ok", timestamp: "2026-05-09T00:00:01.000Z", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+          { id: "assistant_final", parentId: "tool_result", type: "message", role: "assistant", title: "assistant", preview: "finished", timestamp: "2026-05-09T00:00:02.000Z", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" },
+        ],
+        defaultFilter: "default",
+        filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+        generatedAt: "2026-05-09T00:00:02.000Z",
+      })).toBe(true);
+
+      expect(registry.getSessionState("sess_1")?.messages.map((message) => message.id)).toEqual(["user_1", "tool_result", "assistant_final"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns snapshots for active sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-remote-control-registry-"));
     const sessionFile = join(root, "session.jsonl");

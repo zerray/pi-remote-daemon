@@ -670,12 +670,13 @@ describe("remote control extension", () => {
     });
   });
 
-  it("retries pending transcript events and forwards them once session entries appear", async () => {
+  it("retries pending transcript events and forwards the refreshed tree state once session entries appear", async () => {
     vi.useFakeTimers();
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
     const entries: unknown[] = [];
     ctx.sessionManager.getEntries = () => entries;
+    ctx.sessionManager.getLeafId = () => "entry_user_1";
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -694,11 +695,21 @@ describe("remote control extension", () => {
     entries.push({ type: "message", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", timestamp: 1778284800000, content: "sent from iOS" } });
     await vi.advanceTimersByTimeAsync(100);
 
-    await vi.waitFor(() => expect(fetchCalls).toHaveLength(2));
-    expect(fetchCalls.at(-1)).toEqual({
-      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-      init: { method: "POST", body: { type: "message_end", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } } },
+    await vi.waitFor(() => {
+      const eventCalls = fetchCalls.filter((call) => typeof call === "object" && call !== null && String((call as { url?: unknown }).url).endsWith("/events"));
+      expect(eventCalls).toHaveLength(2);
     });
+    const eventCalls = fetchCalls.filter((call) => typeof call === "object" && call !== null && String((call as { url?: unknown }).url).endsWith("/events"));
+    expect(eventCalls).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "message_end", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } } },
+      },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "tree_state", leafId: "entry_user_1", branchVersion: expect.stringMatching(/^branchv_/) } },
+      },
+    ]);
   });
 
   it("does not forward temporary transcript ids and flushes with canonical session entry ids", async () => {

@@ -184,7 +184,11 @@ function scheduleTranscriptRetry(
   const timer = setTimeout(() => {
     retryTimers.delete(sessionId);
     if (!activeSessionIds.has(sessionId)) return;
-    canonicalizer.drain(ctx).forEach((event) => void postTuiEvent(sessionId, event));
+    const events = canonicalizer.drain(ctx);
+    events.forEach((event) => void postTuiEvent(sessionId, event));
+    if (events.some((event) => asRecord(event).type === "message_end")) {
+      void postTreeStateAfterMessageAppend({ type: "message_end" }, ctx, sessionId);
+    }
     scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, retryTimers);
   }, 100);
   timer.unref?.();
