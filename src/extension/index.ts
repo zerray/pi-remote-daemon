@@ -19,6 +19,7 @@ const runtimeStatusCache = new Map<string, string>();
 const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
 const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
 const remoteReplacementInFlightSessionIds = new Set<string>();
+const localForkRemoteControlDisabledTargetFiles = new Set<string>();
 
 export function __resetRemoteControlExtensionStateForTests(): void {
   for (const timer of pollTimers.values()) clearInterval(timer);
@@ -29,6 +30,7 @@ export function __resetRemoteControlExtensionStateForTests(): void {
   transcriptEventCanonicalizers.clear();
   transcriptRetryTimers.clear();
   remoteReplacementInFlightSessionIds.clear();
+  localForkRemoteControlDisabledTargetFiles.clear();
 }
 
 export default function remoteControlExtension(pi: ExtensionAPI): void {
@@ -54,10 +56,12 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
     transcriptRetryTimers.delete(sessionId);
     deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
-  const cleanup = async (_event: unknown, ctx: ExtensionContext) => {
+  const cleanup = async (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
+    const isRemoteReplacement = remoteReplacementInFlightSessionIds.has(sessionId);
+    rememberLocalForkRemoteControlDisabled(event, ctx, sessionId, isRemoteReplacement);
     resetLocalState(ctx);
-    if (remoteReplacementInFlightSessionIds.has(sessionId)) return;
+    if (isRemoteReplacement) return;
     await unregisterTuiSession(sessionId).catch(() => undefined);
   };
 
@@ -136,7 +140,10 @@ function registerEventForwarders(
   cleanup: (event: unknown, ctx: ExtensionContext) => void | Promise<void>,
   resetLocalState: (ctx: ExtensionContext) => void,
 ): void {
-  pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
+  pi.on("session_start", (event, ctx) => {
+    resetLocalState(ctx);
+    notifyLocalForkRemoteControlDisabled(event, ctx);
+  });
   pi.on("session_shutdown", (event, ctx) => cleanup(event, ctx));
   pi.on("session_info_changed" as never, forward as never);
   pi.on("turn_start", forward);
@@ -149,6 +156,21 @@ function registerEventForwarders(
   pi.on("tool_execution_end", forward);
   pi.on("agent_start", forward);
   pi.on("agent_end", forward);
+}
+
+function rememberLocalForkRemoteControlDisabled(event: unknown, ctx: ExtensionContext, sessionId: string, isRemoteReplacement: boolean): void {
+  if (isRemoteReplacement || !activeSessionIds.has(sessionId)) return;
+  const record = asRecord(event);
+  if (record.reason !== "fork") return;
+  localForkRemoteControlDisabledTargetFiles.add(readString(record.targetSessionFile) ?? "*");
+}
+
+function notifyLocalForkRemoteControlDisabled(event: unknown, ctx: ExtensionContext): void {
+  if (asRecord(event).reason !== "fork") return;
+  const sessionFile = ctx.sessionManager.getSessionFile?.();
+  const shouldNotify = (sessionFile !== undefined && localForkRemoteControlDisabledTargetFiles.delete(sessionFile)) || localForkRemoteControlDisabledTargetFiles.delete("*");
+  if (!shouldNotify) return;
+  ctx.ui.notify("Remote control was disabled for the previous session. Re-run /remote-control to control this fork from iOS.", "warning");
 }
 
 function scheduleTranscriptRetry(

@@ -493,6 +493,27 @@ describe("remote control extension", () => {
     expect(fetchCalls[0]?.url).toBe("http://127.0.0.1:17373/v1/tui/sessions");
   });
 
+  it("notifies in the forked TUI session when remote control was disabled by a local fork", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const oldContext = createContext();
+    const newContext = createContext();
+    newContext.ctx.sessionManager.getSessionId = () => "pi_2";
+    newContext.ctx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", oldContext.ctx);
+
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "fork", targetSessionFile: "/tmp/fork.jsonl" }, oldContext.ctx);
+    handlers.get("session_start")?.({ type: "session_start", reason: "fork", previousSessionFile: "/tmp/session.jsonl" }, newContext.ctx);
+
+    expect(newContext.notifications.at(-1)).toEqual({
+      message: "Remote control was disabled for the previous session. Re-run /remote-control to control this fork from iOS.",
+      type: "warning",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("does not automatically re-enable remote control on resumed sessions", async () => {
     const { pi, handlers } = createFakePi();
     const { ctx, statuses } = createContext();
