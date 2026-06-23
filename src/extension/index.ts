@@ -3,21 +3,37 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
-import type { RemoteCompactResultEvent } from "../types.js";
+import type { RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
 import { projectIdForPath } from "../session-index.js";
+import { buildTreeSnapshot } from "../tree-snapshot.js";
 import { createTranscriptEventCanonicalizer } from "./transcript-event-canonicalizer.js";
 
 export { collectRuntimeStatus } from "../runtime-status.js";
 
+const activeSessionIds = new Set<string>();
+const pollTimers = new Map<string, NodeJS.Timeout>();
+const runtimeStatusCache = new Map<string, string>();
+const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
+const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
+const remoteReplacementInFlightSessionIds = new Set<string>();
+const localForkRemoteControlDisabledTargetFiles = new Set<string>();
+
+export function __resetRemoteControlExtensionStateForTests(): void {
+  for (const timer of pollTimers.values()) clearInterval(timer);
+  for (const timer of transcriptRetryTimers.values()) clearTimeout(timer);
+  activeSessionIds.clear();
+  pollTimers.clear();
+  runtimeStatusCache.clear();
+  transcriptEventCanonicalizers.clear();
+  transcriptRetryTimers.clear();
+  remoteReplacementInFlightSessionIds.clear();
+  localForkRemoteControlDisabledTargetFiles.clear();
+}
+
 export default function remoteControlExtension(pi: ExtensionAPI): void {
-  const activeSessionIds = new Set<string>();
-  const pollTimers = new Map<string, NodeJS.Timeout>();
-  const runtimeStatusCache = new Map<string, string>();
-  const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTranscriptEventCanonicalizer>>();
-  const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
   const forward = (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     if (activeSessionIds.has(sessionId)) {
@@ -26,6 +42,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
       const sessionNameEvent = sessionNameEventForDaemon(event);
       const events = sessionNameEvent ? [sessionNameEvent] : canonicalizer.canonicalize(event, ctx);
       events.forEach((daemonEvent) => void postTuiEvent(sessionId, daemonEvent));
+      if (events.length > 0) void postTreeStateAfterMessageAppend(event, ctx, sessionId);
       scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, transcriptRetryTimers);
       void postRuntimeStatusIfChanged(pi, ctx, sessionId, runtimeStatusCache);
     }
@@ -39,9 +56,12 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
     transcriptRetryTimers.delete(sessionId);
     deactivateLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
   };
-  const cleanup = async (ctx: ExtensionContext) => {
+  const cleanup = async (event: unknown, ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
+    const isRemoteReplacement = remoteReplacementInFlightSessionIds.has(sessionId);
+    rememberLocalForkRemoteControlDisabled(event, ctx, sessionId, isRemoteReplacement);
     resetLocalState(ctx);
+    if (isRemoteReplacement) return;
     await unregisterTuiSession(sessionId).catch(() => undefined);
   };
 
@@ -117,11 +137,14 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
 function registerEventForwarders(
   pi: ExtensionAPI,
   forward: (event: unknown, ctx: ExtensionContext) => void,
-  cleanup: (ctx: ExtensionContext) => void | Promise<void>,
+  cleanup: (event: unknown, ctx: ExtensionContext) => void | Promise<void>,
   resetLocalState: (ctx: ExtensionContext) => void,
 ): void {
-  pi.on("session_start", (_event, ctx) => resetLocalState(ctx));
-  pi.on("session_shutdown", (_event, ctx) => cleanup(ctx));
+  pi.on("session_start", (event, ctx) => {
+    resetLocalState(ctx);
+    notifyLocalForkRemoteControlDisabled(event, ctx);
+  });
+  pi.on("session_shutdown", (event, ctx) => cleanup(event, ctx));
   pi.on("session_info_changed" as never, forward as never);
   pi.on("turn_start", forward);
   pi.on("turn_end", forward);
@@ -135,6 +158,21 @@ function registerEventForwarders(
   pi.on("agent_end", forward);
 }
 
+function rememberLocalForkRemoteControlDisabled(event: unknown, ctx: ExtensionContext, sessionId: string, isRemoteReplacement: boolean): void {
+  if (isRemoteReplacement || !activeSessionIds.has(sessionId)) return;
+  const record = asRecord(event);
+  if (record.reason !== "fork") return;
+  localForkRemoteControlDisabledTargetFiles.add(readString(record.targetSessionFile) ?? "*");
+}
+
+function notifyLocalForkRemoteControlDisabled(event: unknown, ctx: ExtensionContext): void {
+  if (asRecord(event).reason !== "fork") return;
+  const sessionFile = ctx.sessionManager.getSessionFile?.();
+  const shouldNotify = (sessionFile !== undefined && localForkRemoteControlDisabledTargetFiles.delete(sessionFile)) || localForkRemoteControlDisabledTargetFiles.delete("*");
+  if (!shouldNotify) return;
+  ctx.ui.notify("Remote control was disabled for the previous session. Re-run /remote-control to control this fork from iOS.", "warning");
+}
+
 function scheduleTranscriptRetry(
   sessionId: string,
   ctx: ExtensionContext,
@@ -146,11 +184,32 @@ function scheduleTranscriptRetry(
   const timer = setTimeout(() => {
     retryTimers.delete(sessionId);
     if (!activeSessionIds.has(sessionId)) return;
-    canonicalizer.drain(ctx).forEach((event) => void postTuiEvent(sessionId, event));
+    const events = canonicalizer.drain(ctx);
+    events.forEach((event) => void postTuiEvent(sessionId, event));
+    if (events.some((event) => asRecord(event).type === "message_end")) {
+      void postTreeStateAfterMessageAppend({ type: "message_end" }, ctx, sessionId);
+    }
     scheduleTranscriptRetry(sessionId, ctx, canonicalizer, activeSessionIds, retryTimers);
   }, 100);
   timer.unref?.();
   retryTimers.set(sessionId, timer);
+}
+
+async function postTreeStateAfterMessageAppend(event: unknown, ctx: ExtensionContext, sessionId: string): Promise<void> {
+  if (asRecord(event).type !== "message_end") return;
+  const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & { getLeafId?: () => string | null };
+  const leafId = sessionManager.getLeafId?.() ?? null;
+  await postTuiEvent(sessionId, {
+    type: "tree_state",
+    leafId,
+    branchVersion: branchVersionForContext(ctx, leafId),
+  });
+}
+
+function branchVersionForContext(ctx: Pick<ExtensionContext, "sessionManager">, leafId: string | null): string {
+  const entries = ctx.sessionManager.getEntries();
+  const latestId = readString(asRecord(entries.at(-1)).id) ?? "none";
+  return `branchv_${Buffer.from(`${leafId ?? "root"}:${entries.length}:${latestId}`, "utf8").toString("base64url")}`;
 }
 
 function sessionNameEventForDaemon(event: unknown): unknown | undefined {
@@ -213,7 +272,7 @@ async function unregisterTuiSession(sessionId: string): Promise<void> {
 }
 
 function activateLocalSession(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -282,8 +341,23 @@ function toRegistration(pi: unknown, ctx: ExtensionCommandContext): unknown {
     entries: ctx.sessionManager.getEntries(),
     isStreaming: !ctx.isIdle(),
     runtimeStatus: collectRuntimeStatus(pi, ctx),
+    treeSnapshot: treeSnapshotForContext(ctx),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function treeSnapshotForContext(ctx: ExtensionCommandContext): unknown {
+  const sessionManager = ctx.sessionManager as typeof ctx.sessionManager & {
+    getTree?: () => unknown[];
+    getLeafId?: () => string | null;
+  };
+  const roots = sessionManager.getTree?.();
+  if (!roots) return undefined;
+  return buildTreeSnapshot({
+    sessionId: daemonSessionId(ctx),
+    roots: roots as never,
+    leafId: sessionManager.getLeafId?.() ?? null,
+  });
 }
 
 function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string {
@@ -291,7 +365,7 @@ function daemonSessionId(ctx: Pick<ExtensionContext, "sessionManager">): string 
 }
 
 async function pollRemoteCommands(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -307,11 +381,11 @@ async function pollRemoteCommands(
   }
   if (!response.ok) return;
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
-  for (const command of body.commands ?? []) handleRemoteCommand(pi, ctx, command, sessionId);
+  for (const command of body.commands ?? []) handleRemoteCommand(pi as Pick<ExtensionAPI, "sendUserMessage">, ctx, command, sessionId);
 }
 
 async function reRegisterTuiSessionAfterHeartbeatMiss(
-  pi: ExtensionAPI,
+  pi: unknown,
   ctx: ExtensionCommandContext,
   sessionId: string,
   activeSessionIds: Set<string>,
@@ -350,18 +424,218 @@ function disconnectLocalSession(
   ctx.ui.notify("Remote control disconnected; run /remote-control to re-enable", "warning");
 }
 
-export function handleRemoteCommand(pi: Pick<ExtensionAPI, "sendUserMessage">, ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "isIdle">, command: RemoteTuiCommand, sessionId?: string): void {
+export function handleRemoteCommand(
+  pi: Pick<ExtensionAPI, "sendUserMessage">,
+  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "fork" | "isIdle" | "navigateTree" | "sessionManager">,
+  command: RemoteTuiCommand,
+  sessionId?: string,
+): void {
   if (command.type === "remote_prompt") {
     pi.sendUserMessage(command.text, remotePromptDeliveryOptions(ctx, command.streamingBehavior));
     return;
   }
   if (command.type === "remote_abort") ctx.abort();
   if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_tree_navigate") handleRemoteTreeNavigateCommand(ctx, command, sessionId);
+  if (command.type === "remote_fork") handleRemoteForkCommand(pi, ctx, command, sessionId);
+  if (command.type === "remote_clone") handleRemoteCloneCommand(pi, ctx, command, sessionId);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
   if (streamingBehavior) return { deliverAs: streamingBehavior };
   return ctx.isIdle() ? undefined : { deliverAs: "followUp" };
+}
+
+function preserveRemoteControlForReplacement(pi: unknown, replacementCtx: ExtensionCommandContext): void {
+  const replacementSessionId = daemonSessionId(replacementCtx);
+  runtimeStatusCache.set(replacementSessionId, comparableRuntimeStatus(collectRuntimeStatus(pi, replacementCtx)));
+  activateLocalSession(pi, replacementCtx, replacementSessionId, activeSessionIds, pollTimers, runtimeStatusCache);
+}
+
+function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork">, command: Extract<RemoteTuiCommand, { type: "remote_clone" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  if (!command.baseLeafId) {
+    void postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: "tree_state_changed" } satisfies RemoteCloneResultEvent).catch(() => undefined);
+    return;
+  }
+  void (async () => {
+    let replacementSessionStarted = false;
+    let replacementNotified = false;
+    remoteReplacementInFlightSessionIds.add(sessionId);
+    try {
+      let replacementSummary: unknown;
+      const result = await ctx.fork(command.baseLeafId!, {
+        position: "at",
+        withSession: async (replacementCtx) => {
+          replacementSessionStarted = true;
+          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+            method: "POST",
+            headers: await tuiHeaders(),
+            body: JSON.stringify(registration),
+          });
+          const responseBody = asRecord(await response.json().catch(() => ({})));
+          if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
+          replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+          preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
+          await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession: replacementSummary } satisfies RemoteCloneResultEvent);
+          await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession: replacementSummary } satisfies RemoteSessionReplacedEvent);
+          replacementNotified = true;
+        },
+      });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteCloneResultEvent);
+        return;
+      }
+      const newSession = replacementSummary ?? {};
+      if (!replacementNotified) {
+        await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: true, newSession } satisfies RemoteCloneResultEvent);
+        await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      }
+      await unregisterTuiSession(sessionId).catch(() => undefined);
+    } catch (error) {
+      if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_clone_result", requestId: command.requestId, ok: false, error: cloneErrorCode(error) } satisfies RemoteCloneResultEvent);
+      if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
+    } finally {
+      remoteReplacementInFlightSessionIds.delete(sessionId);
+    }
+  })().catch(() => undefined);
+}
+
+function cloneErrorCode(error: unknown): Extract<RemoteCloneResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "cancelled";
+}
+
+function forkEditorTextForTargetEntry(entry: unknown): string {
+  const entryRecord = asRecord(entry);
+  if (entryRecord.type !== "message") return "";
+  const message = asRecord(entryRecord.message);
+  if (message.role !== "user") return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => asRecord(part).type === "text")
+    .map((part) => readString(asRecord(part).text) ?? "")
+    .join("");
+}
+
+function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext, "fork" | "sessionManager">, command: Extract<RemoteTuiCommand, { type: "remote_fork" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  void (async () => {
+    let replacementSessionStarted = false;
+    let replacementNotified = false;
+    remoteReplacementInFlightSessionIds.add(sessionId);
+    try {
+      let replacementSummary: unknown;
+      const targetEditorText = forkEditorTextForTargetEntry(ctx.sessionManager.getEntry(command.targetEntryId));
+      const result = await ctx.fork(command.targetEntryId, {
+        position: "before",
+        withSession: async (replacementCtx) => {
+          replacementSessionStarted = true;
+          replacementCtx.ui.setEditorText("");
+          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
+            method: "POST",
+            headers: await tuiHeaders(),
+            body: JSON.stringify(registration),
+          });
+          const responseBody = asRecord(await response.json().catch(() => ({})));
+          if (!response.ok) throw new Error(`replacement registration failed: HTTP ${response.status}`);
+          replacementSummary = { ...asRecord(summaryFromRegistration(registration)), ...asRecord(responseBody.session) };
+          preserveRemoteControlForReplacement(pi, replacementCtx as ExtensionCommandContext);
+          await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession: replacementSummary, editorText: targetEditorText } satisfies RemoteForkResultEvent);
+          await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession: replacementSummary } satisfies RemoteSessionReplacedEvent);
+          replacementNotified = true;
+        },
+      });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteForkResultEvent);
+        return;
+      }
+      const newSession = replacementSummary ?? {};
+      const editorText = readString(resultRecord.selectedText) ?? readString(resultRecord.editorText) ?? targetEditorText;
+      if (!replacementNotified) {
+        await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: true, newSession, editorText } satisfies RemoteForkResultEvent);
+        await postTuiEvent(sessionId, { type: "remote_session_replaced", requestId: command.requestId, oldSessionId: sessionId, newSession } satisfies RemoteSessionReplacedEvent);
+      }
+      await unregisterTuiSession(sessionId).catch(() => undefined);
+    } catch (error) {
+      if (!replacementNotified) await postTuiEvent(sessionId, { type: "remote_fork_result", requestId: command.requestId, ok: false, error: forkErrorCode(error) } satisfies RemoteForkResultEvent);
+      if (replacementSessionStarted) await unregisterTuiSession(sessionId).catch(() => undefined);
+    } finally {
+      remoteReplacementInFlightSessionIds.delete(sessionId);
+    }
+  })().catch(() => undefined);
+}
+
+function forkErrorCode(error: unknown): Extract<RemoteForkResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("not found")) return "target_not_found";
+  if (message.toLowerCase().includes("forkable")) return "target_not_forkable";
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "cancelled";
+}
+
+function summaryFromRegistration(registration: unknown): unknown {
+  const record = asRecord(registration);
+  const project = asRecord(record.project);
+  return {
+    id: readString(record.id) ?? "",
+    piSessionId: readString(record.piSessionId) ?? "",
+    projectId: readString(project.id) ?? "",
+    name: readString(record.name) ?? null,
+    path: readString(record.sessionFile) ?? "",
+    updatedAt: readString(record.updatedAt) ?? new Date().toISOString(),
+    messageCount: readNumber(record.messageCount) ?? 0,
+    isActive: true,
+  };
+}
+
+function handleRemoteTreeNavigateCommand(ctx: Pick<ExtensionCommandContext, "navigateTree" | "sessionManager">, command: Extract<RemoteTuiCommand, { type: "remote_tree_navigate" }>, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  void (async () => {
+    try {
+      const result = await ctx.navigateTree(command.targetEntryId, { summarize: command.summaryMode === "default" });
+      const resultRecord = asRecord(result);
+      if (result.cancelled) {
+        await postTuiEvent(sessionId, { type: "remote_tree_navigation_result", requestId: command.requestId, ok: false, error: resultRecord.aborted === true ? "aborted" : "cancelled" } satisfies RemoteTreeNavigationResultEvent);
+        return;
+      }
+      const snapshot = treeSnapshotForContext({ sessionManager: ctx.sessionManager } as ExtensionCommandContext);
+      const snapshotRecord = asRecord(snapshot);
+      await postTuiEvent(sessionId, {
+        type: "remote_tree_navigation_result",
+        requestId: command.requestId,
+        ok: true,
+        leafId: readString(snapshotRecord.leafId) ?? null,
+        snapshotVersion: readString(snapshotRecord.snapshotVersion) ?? "",
+        branchVersion: readString(snapshotRecord.branchVersion) ?? "",
+        ...(typeof resultRecord.editorText === "string" ? { editorText: resultRecord.editorText } : {}),
+      } satisfies RemoteTreeNavigationResultEvent);
+    } catch (error) {
+      await postTuiEvent(sessionId, { type: "remote_tree_navigation_result", requestId: command.requestId, ok: false, error: navigationErrorCode(error) } satisfies RemoteTreeNavigationResultEvent);
+    }
+  })().catch(() => undefined);
+}
+
+function navigationErrorCode(error: unknown): Extract<RemoteTreeNavigationResultEvent, { ok: false }>["error"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("not found")) return "target_not_found";
+  if (message.toLowerCase().includes("abort")) return "aborted";
+  return "summarization_failed";
+}
+
+function handleRemoteTreeRefreshCommand(ctx: Pick<ExtensionCommandContext, "sessionManager">, requestId: string, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  const snapshot = treeSnapshotForContext({ sessionManager: ctx.sessionManager } as ExtensionCommandContext);
+  if (!snapshot) return;
+  void postTuiEvent(sessionId, { type: "remote_tree_snapshot", requestId, snapshot }).catch(() => undefined);
 }
 
 function handleRemoteCompactCommand(ctx: Pick<ExtensionCommandContext, "compact">, requestId: string, sessionId: string | undefined): void {

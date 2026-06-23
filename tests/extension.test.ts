@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import remoteControlExtension, { collectRuntimeStatus, enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
+import remoteControlExtension, { __resetRemoteControlExtensionStateForTests, collectRuntimeStatus, enrichTuiEventForDaemon, handleRemoteCommand } from "../src/extension/index.js";
 
 type Registered = {
   name: string;
@@ -17,6 +17,8 @@ type ExtensionTestContext = {
     getSessionFile(): string | undefined;
     getSessionName(): string | undefined;
     getEntries(): unknown[];
+    getLeafId?(): string | null;
+    getTree?(): unknown[];
   };
   model?: unknown;
   getContextUsage?(): unknown;
@@ -88,6 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetRemoteControlExtensionStateForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -182,6 +185,93 @@ describe("remote control extension", () => {
       },
     ]);
     expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
+  });
+
+  it("registers an initial reduced Tree Snapshot when tree state is available", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    const longPreview = "x".repeat(501);
+    ctx.sessionManager.getLeafId = () => "assistant_1";
+    ctx.sessionManager.getTree = () => [
+      {
+        entry: { type: "message", id: "user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "Inspect the auth flow" } },
+        label: "checkpoint",
+        children: [
+          { entry: { type: "message", id: "assistant_1", parentId: "user_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "I'll inspect it." }] } }, children: [] },
+          { entry: { type: "custom_message", id: "custom_1", parentId: "user_1", timestamp: "2026-05-09T00:00:02.000Z", customType: "fixture", content: longPreview, display: true }, children: [] },
+          { entry: { type: "compaction", id: "compact_1", parentId: "user_1", timestamp: "2026-05-09T00:00:03.000Z", summary: "Earlier auth investigation", tokensBefore: 12345 }, children: [] },
+          { entry: { type: "branch_summary", id: "branch_1", parentId: "user_1", timestamp: "2026-05-09T00:00:04.000Z", summary: "Explored OAuth branch", fromId: "assistant_1" }, children: [] },
+          { entry: { type: "label", id: "label_1", parentId: "user_1", timestamp: "2026-05-09T00:00:05.000Z", targetId: "user_1", label: "checkpoint" }, children: [] },
+        ],
+      },
+    ];
+    let registrationBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/tui/sessions")) registrationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    const snapshot = registrationBody?.treeSnapshot as { entries: Array<Record<string, unknown>>; [key: string]: unknown };
+    expect(snapshot).toMatchObject({
+      sessionId: "sess_pi_1",
+      leafId: "assistant_1",
+      snapshotVersion: expect.stringMatching(/^treev_/),
+      branchVersion: expect.stringMatching(/^branchv_/),
+      defaultFilter: "default",
+      filters: ["default", "no-tools", "user-only", "labeled-only", "all"],
+    });
+    expect(snapshot.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "user_1", type: "message", role: "user", title: "user", preview: "Inspect the auth flow", label: "checkpoint", isCurrentLeaf: false, isOnActiveBranch: true, isForkable: true, navigationBehavior: "edit_prompt" }),
+      expect.objectContaining({ id: "assistant_1", type: "message", role: "assistant", title: "assistant", preview: "I'll inspect it.", isCurrentLeaf: true, isOnActiveBranch: true, isForkable: false, navigationBehavior: "navigate" }),
+      expect.objectContaining({ id: "custom_1", type: "custom_message", role: "custom", customType: "fixture", preview: "x".repeat(500), previewTruncated: true, navigationBehavior: "edit_prompt" }),
+      expect.objectContaining({ id: "compact_1", type: "compaction", title: "compaction", preview: "Earlier auth investigation" }),
+      expect.objectContaining({ id: "branch_1", type: "branch_summary", title: "branch summary", preview: "Explored OAuth branch" }),
+      expect.objectContaining({ id: "label_1", type: "label", title: "label", preview: "checkpoint" }),
+    ]));
+    expect(snapshot.entries.find((entry) => entry.id === "user_1")).not.toHaveProperty("message");
+  });
+
+  it("omits non-current assistant tree entries with no text content from reduced Tree Snapshots", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    ctx.sessionManager.getLeafId = () => "assistant_leaf_tool_only";
+    ctx.sessionManager.getTree = () => [
+      {
+        entry: { type: "message", id: "user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "run checks" } },
+        children: [
+          { entry: { type: "message", id: "assistant_text", parentId: "user_1", timestamp: "2026-05-09T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Running checks." }] } }, children: [] },
+          { entry: { type: "message", id: "assistant_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:02.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "npm test" } }] }, stopReason: "toolUse" }, children: [] },
+          { entry: { type: "message", id: "assistant_thinking_only", parentId: "user_1", timestamp: "2026-05-09T00:00:03.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "Checking" }] } }, children: [] },
+          { entry: { type: "message", id: "assistant_error_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:04.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "bad" } }] }, stopReason: "error" }, children: [] },
+          { entry: { type: "message", id: "assistant_leaf_tool_only", parentId: "user_1", timestamp: "2026-05-09T00:00:05.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "call_3", name: "bash", arguments: { command: "still running" } }] }, stopReason: "toolUse" }, children: [] },
+        ],
+      },
+    ];
+    let registrationBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/tui/sessions")) registrationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    const snapshot = registrationBody?.treeSnapshot as { entries: Array<Record<string, unknown>> };
+    expect(snapshot.entries.map((entry) => entry.id)).toEqual([
+      "user_1",
+      "assistant_text",
+      "assistant_error_tool_only",
+      "assistant_leaf_tool_only",
+    ]);
   });
 
   it("reports startup readiness failure without throwing", async () => {
@@ -403,6 +493,27 @@ describe("remote control extension", () => {
     expect(fetchCalls[0]?.url).toBe("http://127.0.0.1:17373/v1/tui/sessions");
   });
 
+  it("notifies in the forked TUI session when remote control was disabled by a local fork", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const oldContext = createContext();
+    const newContext = createContext();
+    newContext.ctx.sessionManager.getSessionId = () => "pi_2";
+    newContext.ctx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", oldContext.ctx);
+
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "fork", targetSessionFile: "/tmp/fork.jsonl" }, oldContext.ctx);
+    handlers.get("session_start")?.({ type: "session_start", reason: "fork", previousSessionFile: "/tmp/session.jsonl" }, newContext.ctx);
+
+    expect(newContext.notifications.at(-1)).toEqual({
+      message: "Remote control was disabled for the previous session. Re-run /remote-control to control this fork from iOS.",
+      type: "warning",
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("does not automatically re-enable remote control on resumed sessions", async () => {
     const { pi, handlers } = createFakePi();
     const { ctx, statuses } = createContext();
@@ -510,6 +621,32 @@ describe("remote control extension", () => {
     })));
   });
 
+  it("reports package-internal tree_state after message appends while remote control is active", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    ctx.sessionManager.getLeafId = () => "entry_user_1";
+    ctx.sessionManager.getEntries = () => [
+      { type: "message", id: "entry_user_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", timestamp: 1778284800000, content: "sent" } },
+    ];
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    handlers.get("message_end")?.({ type: "message_end", message: { role: "user", timestamp: 1778284800000, content: "sent" } }, ctx);
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: { method: "POST", body: { type: "tree_state", leafId: "entry_user_1", branchVersion: expect.stringMatching(/^branchv_/) } },
+    }));
+  });
+
   it("forwards TUI session-name changes while remote control is active", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
@@ -533,12 +670,13 @@ describe("remote control extension", () => {
     });
   });
 
-  it("retries pending transcript events and forwards them once session entries appear", async () => {
+  it("retries pending transcript events and forwards the refreshed tree state once session entries appear", async () => {
     vi.useFakeTimers();
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
     const entries: unknown[] = [];
     ctx.sessionManager.getEntries = () => entries;
+    ctx.sessionManager.getLeafId = () => "entry_user_1";
     const fetchCalls: unknown[] = [];
     vi.stubGlobal(
       "fetch",
@@ -557,11 +695,21 @@ describe("remote control extension", () => {
     entries.push({ type: "message", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", timestamp: 1778284800000, content: "sent from iOS" } });
     await vi.advanceTimersByTimeAsync(100);
 
-    await vi.waitFor(() => expect(fetchCalls).toHaveLength(2));
-    expect(fetchCalls.at(-1)).toEqual({
-      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-      init: { method: "POST", body: { type: "message_end", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } } },
+    await vi.waitFor(() => {
+      const eventCalls = fetchCalls.filter((call) => typeof call === "object" && call !== null && String((call as { url?: unknown }).url).endsWith("/events"));
+      expect(eventCalls).toHaveLength(2);
     });
+    const eventCalls = fetchCalls.filter((call) => typeof call === "object" && call !== null && String((call as { url?: unknown }).url).endsWith("/events"));
+    expect(eventCalls).toEqual([
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "message_end", id: "entry_user_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_user_1", role: "user", timestamp: 1778284800000, content: "sent from iOS" } } },
+      },
+      {
+        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+        init: { method: "POST", body: { type: "tree_state", leafId: "entry_user_1", branchVersion: expect.stringMatching(/^branchv_/) } },
+      },
+    ]);
   });
 
   it("does not forward temporary transcript ids and flushes with canonical session entry ids", async () => {
@@ -586,18 +734,19 @@ describe("remote control extension", () => {
 
     entries.push({ type: "message", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } });
     handlers.get("message_end")?.({ type: "message_end", id: "tmp_1", timestamp: 1778284800000, message: { id: "tmp_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } }, ctx);
-    await vi.waitFor(() => expect(fetchCalls).toHaveLength(3));
-
-    expect(fetchCalls.slice(1)).toEqual([
-      {
-        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-        init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
-      },
-      {
-        url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
-        init: { method: "POST", body: { type: "message_end", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
-      },
-    ]);
+    await vi.waitFor(() => {
+      const eventCalls = fetchCalls.filter((call) => typeof call === "object" && call !== null && String((call as { url?: unknown }).url).endsWith("/events"));
+      expect(eventCalls).toEqual(expect.arrayContaining([
+        {
+          url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+          init: { method: "POST", body: { type: "message_start", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
+        },
+        {
+          url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+          init: { method: "POST", body: { type: "message_end", id: "entry_1", timestamp: "2026-05-09T00:00:00.000Z", message: { id: "entry_1", role: "assistant", timestamp: 1778284800000, content: [{ type: "text", text: "hello" }] } } },
+        },
+      ]));
+    });
   });
 
   it("forwards TUI events while remote control is active", async () => {
@@ -654,6 +803,329 @@ describe("remote control extension", () => {
     });
 
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
+  });
+
+  it("clones the active branch into a replacement session without returning draft text", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_clone" } }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const replacementCtx = createContext().ctx;
+    replacementCtx.sessionManager.getSessionId = () => "pi_clone";
+    replacementCtx.sessionManager.getSessionFile = () => "/tmp/clone.jsonl";
+    const fork = vi.fn(async (_entryId: string, options: { position?: "at"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
+      await options.withSession?.(replacementCtx);
+      return { cancelled: false };
+    });
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_clone",
+      requestId: "req_clone_1",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "http://127.0.0.1:17373/v1/tui/sessions", init: expect.objectContaining({ method: "POST", body: expect.objectContaining({ id: "sess_pi_clone", sessionFile: "/tmp/clone.jsonl" }) }) }),
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_clone_result", requestId: "req_clone_1", ok: true, newSession: expect.objectContaining({ id: "sess_pi_clone", isActive: true }) } } },
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_session_replaced", requestId: "req_clone_1", oldSessionId: "sess_pi_1", newSession: expect.objectContaining({ id: "sess_pi_clone", isActive: true }) } } },
+    ])));
+    expect(fork).toHaveBeenCalledWith("entry_leaf", { position: "at", withSession: expect.any(Function) });
+  });
+
+  it("forks into a replacement session, preserves remote control, and returns draft text only to iOS", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_fork" } }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", parentId: "entry_parent", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "selected " }, { type: "image", source: "ignored" }, { type: "text", text: "prompt" }] } }
+      : undefined;
+    const replacementCtx = createContext().ctx;
+    replacementCtx.sessionManager.getSessionId = () => "pi_fork";
+    replacementCtx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    const setEditorText = vi.fn();
+    replacementCtx.ui.setEditorText = setEditorText as never;
+    const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
+      await options.withSession?.(replacementCtx);
+      return { cancelled: false };
+    });
+    const sendUserMessage = vi.fn();
+
+    handleRemoteCommand({ sendUserMessage } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_fork",
+      requestId: "req_fork_1",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ url: "http://127.0.0.1:17373/v1/tui/sessions", init: expect.objectContaining({ method: "POST", body: expect.objectContaining({ id: "sess_pi_fork", sessionFile: "/tmp/fork.jsonl" }) }) }),
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_fork_result", requestId: "req_fork_1", ok: true, newSession: expect.objectContaining({ id: "sess_pi_fork", isActive: true }), editorText: "selected prompt" } } },
+      { url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events", init: { method: "POST", body: { type: "remote_session_replaced", requestId: "req_fork_1", oldSessionId: "sess_pi_1", newSession: expect.objectContaining({ id: "sess_pi_fork", isActive: true }) } } },
+    ])));
+    expect(fork).toHaveBeenCalledWith("entry_user", { position: "before", withSession: expect.any(Function) });
+    expect(setEditorText).toHaveBeenCalledWith("");
+    expect(sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("notifies iOS as soon as the replacement session is registered during Remote Fork", async () => {
+    const fetchCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_fork" } }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", message: { role: "user", content: "selected prompt" } }
+      : undefined;
+    const replacementCtx = createContext().ctx;
+    replacementCtx.sessionManager.getSessionId = () => "pi_fork";
+    replacementCtx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    replacementCtx.ui.setEditorText = vi.fn() as never;
+    let finishFork!: () => void;
+    const forkFinished = new Promise<void>((resolve) => { finishFork = resolve; });
+    const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementCtx) => Promise<void> }) => {
+      await options.withSession?.(replacementCtx);
+      await forkFinished;
+      return { cancelled: false, selectedText: "late selected prompt" };
+    });
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_fork",
+      requestId: "req_fork_early",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_fork_result", requestId: "req_fork_early", ok: true, editorText: "selected prompt" }),
+    })));
+    expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_session_replaced", requestId: "req_fork_early" }),
+    }));
+    finishFork();
+  });
+
+  it("transfers local remote-control state to the replacement extension instance after Remote Fork", async () => {
+    const oldExtension = createFakePi();
+    const oldContext = createContext();
+    oldContext.ctx.sessionManager.getEntry = (entryId: string) => entryId === "entry_user"
+      ? { type: "message", id: "entry_user", parentId: "entry_parent", timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "selected prompt" } }
+      : undefined;
+    const replacementExtension = createFakePi();
+    const replacementContext = createContext();
+    replacementContext.ctx.sessionManager.getSessionId = () => "pi_fork";
+    replacementContext.ctx.sessionManager.getSessionFile = () => "/tmp/fork.jsonl";
+    const setEditorText = vi.fn();
+    replacementContext.ctx.ui.setEditorText = setEditorText as never;
+    const fetchCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify({ accepted: true, session: { id: "sess_pi_fork" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(oldExtension.pi as never);
+    await oldExtension.commands.find((command) => command.name === "remote-control")!.handler("", oldContext.ctx);
+
+    const fork = vi.fn(async (_entryId: string, options: { position?: "before"; withSession?: (ctx: typeof replacementContext.ctx) => Promise<void> }) => {
+      await oldExtension.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "fork", targetSessionFile: "/tmp/fork.jsonl" }, oldContext.ctx);
+      remoteControlExtension(replacementExtension.pi as never);
+      await options.withSession?.(replacementContext.ctx);
+      return { cancelled: false, selectedText: "selected prompt" };
+    });
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...oldContext.ctx, abort: vi.fn(), compact: vi.fn(), fork } as never, {
+      type: "remote_fork",
+      requestId: "req_fork_1",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_leaf",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(replacementContext.statuses).toContainEqual({ key: "remote-control", text: "\u001b[32mRemote Control Active\u001b[39m" }));
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      body: expect.objectContaining({ type: "remote_session_replaced" }),
+    })));
+    const replacementEventIndex = fetchCalls.findIndex((call) => call.url === "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events" && (call.body as { type?: string } | undefined)?.type === "remote_session_replaced");
+    const oldDeleteIndex = fetchCalls.findIndex((call) => call.url === "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1" && call.method === "DELETE");
+    expect(oldDeleteIndex).toBeGreaterThan(replacementEventIndex);
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_fork/commands",
+      method: "GET",
+      body: undefined,
+    }));
+    await replacementExtension.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, replacementContext.ctx);
+  });
+
+  it("uses Pi default branch summarization for default-summary Remote Tree Navigation", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn(async () => ({ cancelled: false }));
+    ctx.sessionManager.getLeafId = () => "entry_target";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_target", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: "target" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+      type: "remote_tree_navigate",
+      requestId: "req_nav_summary",
+      targetEntryId: "entry_target",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_old",
+      summaryMode: "default",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: expect.objectContaining({ body: expect.objectContaining({ type: "remote_tree_navigation_result", requestId: "req_nav_summary", ok: true }) }),
+    })));
+    expect(navigateTree).toHaveBeenCalledWith("entry_target", { summarize: true });
+  });
+
+  it("navigates the live TUI tree and posts a Remote Tree Navigation result", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn(async () => ({ cancelled: false, editorText: "revise this prompt" }));
+    ctx.sessionManager.getLeafId = () => "entry_parent";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_parent", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "assistant", content: "parent" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+      type: "remote_tree_navigate",
+      requestId: "req_nav_1",
+      targetEntryId: "entry_user",
+      baseSnapshotVersion: "treev_1",
+      baseBranchVersion: "branchv_1",
+      baseLeafId: "entry_parent",
+      summaryMode: "none",
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: {
+        method: "POST",
+        body: expect.objectContaining({
+          type: "remote_tree_navigation_result",
+          requestId: "req_nav_1",
+          ok: true,
+          leafId: "entry_parent",
+          editorText: "revise this prompt",
+        }),
+      },
+    }));
+    expect(navigateTree).toHaveBeenCalledWith("entry_user", { summarize: false });
+  });
+
+  it("posts stable Remote Tree Navigation error codes for cancelled, aborted, and failed summaries", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const navigateTree = vi.fn()
+      .mockResolvedValueOnce({ cancelled: true })
+      .mockResolvedValueOnce({ cancelled: true, aborted: true })
+      .mockRejectedValueOnce(new Error("summary model failed"));
+
+    for (const requestId of ["req_cancel", "req_abort", "req_fail"]) {
+      handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn(), navigateTree } as never, {
+        type: "remote_tree_navigate",
+        requestId,
+        targetEntryId: "entry_target",
+        baseSnapshotVersion: "treev_1",
+        baseBranchVersion: "branchv_1",
+        baseLeafId: "entry_old",
+        summaryMode: "default",
+      }, "sess_pi_1");
+    }
+
+    await vi.waitFor(() => {
+      const bodies = fetchCalls.map((call) => (call as { init: { body: unknown } }).init.body);
+      expect(bodies).toEqual(expect.arrayContaining([
+        { type: "remote_tree_navigation_result", requestId: "req_cancel", ok: false, error: "cancelled" },
+        { type: "remote_tree_navigation_result", requestId: "req_abort", ok: false, error: "aborted" },
+        { type: "remote_tree_navigation_result", requestId: "req_fail", ok: false, error: "summarization_failed" },
+      ]));
+    });
+  });
+
+  it("posts a fresh Tree Snapshot when handling remote Tree Refresh", async () => {
+    const fetchCalls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, init: { method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined } });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    ctx.sessionManager.getLeafId = () => "entry_1";
+    ctx.sessionManager.getTree = () => [
+      { entry: { type: "message", id: "entry_1", parentId: null, timestamp: "2026-05-09T00:00:00.000Z", message: { role: "user", content: "refresh me" } }, children: [] },
+    ];
+
+    handleRemoteCommand({ sendUserMessage: vi.fn() } as never, { ...ctx, abort: vi.fn(), compact: vi.fn() } as never, { type: "remote_tree_refresh", requestId: "req_tree_1" }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual({
+      url: "http://127.0.0.1:17373/v1/tui/sessions/sess_pi_1/events",
+      init: {
+        method: "POST",
+        body: {
+          type: "remote_tree_snapshot",
+          requestId: "req_tree_1",
+          snapshot: expect.objectContaining({
+            sessionId: "sess_pi_1",
+            leafId: "entry_1",
+            entries: [expect.objectContaining({ id: "entry_1", preview: "refresh me", isCurrentLeaf: true })],
+          }),
+        },
+      },
+    }));
   });
 
   it("posts remote compact success and failure results from TUI callbacks", async () => {

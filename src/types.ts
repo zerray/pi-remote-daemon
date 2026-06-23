@@ -57,6 +57,38 @@ export type TranscriptMessagePatch =
   | { type: "toolCall"; toolCall: Extract<TranscriptContentBlock, { type: "toolCall" }> }
   | { type: "replace"; message: TranscriptMessage };
 
+export type TreeFilter = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
+
+export type TreeSnapshot = {
+  sessionId: string;
+  leafId: string | null;
+  snapshotVersion: string;
+  branchVersion: string;
+  entries: TreeEntry[];
+  defaultFilter: "default";
+  filters: TreeFilter[];
+  generatedAt: IsoTimestamp;
+  stale?: boolean;
+};
+
+export type TreeEntry = {
+  id: string;
+  parentId: string | null;
+  type: "message" | "custom_message" | "branch_summary" | "compaction" | "model_change" | "thinking_level_change" | "label" | "session_info" | "custom" | "other";
+  role?: "user" | "assistant" | "toolResult" | "system" | "custom";
+  customType?: string;
+  toolName?: string;
+  title: string;
+  preview: string;
+  previewTruncated?: boolean;
+  timestamp: IsoTimestamp;
+  label?: string;
+  isCurrentLeaf: boolean;
+  isOnActiveBranch: boolean;
+  isForkable: boolean;
+  navigationBehavior: "edit_prompt" | "navigate";
+};
+
 export type RuntimeStatus = {
   model: null | {
     provider: string;
@@ -88,6 +120,22 @@ export type RuntimeStatus = {
   updatedAt: IsoTimestamp;
 };
 
+export type RemoteTreeSnapshotEvent = { type: "remote_tree_snapshot"; requestId?: string; snapshot: TreeSnapshot };
+
+export type RemoteTreeNavigationResultEvent =
+  | { type: "remote_tree_navigation_result"; requestId: string; ok: true; leafId: string | null; snapshotVersion: string; branchVersion: string; editorText?: string }
+  | { type: "remote_tree_navigation_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "summarization_failed" | "cancelled" | "aborted" };
+
+export type RemoteForkResultEvent =
+  | { type: "remote_fork_result"; requestId: string; ok: true; newSession: unknown; editorText: string }
+  | { type: "remote_fork_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "target_not_found" | "target_not_forkable" | "cancelled" | "aborted" };
+
+export type RemoteCloneResultEvent =
+  | { type: "remote_clone_result"; requestId: string; ok: true; newSession: unknown }
+  | { type: "remote_clone_result"; requestId: string; ok: false; error: "session_busy" | "tree_state_changed" | "cancelled" | "aborted" };
+
+export type RemoteSessionReplacedEvent = { type: "remote_session_replaced"; requestId: string; oldSessionId: string; newSession: unknown };
+
 export type RemoteCompactResultEvent =
   | { type: "remote_compact_result"; requestId: string; ok: true; summary: string; firstKeptEntryId: string; tokensBefore: number }
   | { type: "remote_compact_result"; requestId: string; ok: false; message: string };
@@ -95,6 +143,11 @@ export type RemoteCompactResultEvent =
 export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
   | { type: "runtime_status"; status: RuntimeStatus }
+  | RemoteTreeSnapshotEvent
+  | RemoteTreeNavigationResultEvent
+  | RemoteForkResultEvent
+  | RemoteCloneResultEvent
+  | RemoteSessionReplacedEvent
   | RemoteCompactResultEvent
   | { type: "turn_start"; turnIndex: number; createdAt?: IsoTimestamp }
   | { type: "turn_end"; turnIndex: number }

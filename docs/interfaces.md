@@ -97,7 +97,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}?messageLimit={limit}`
 
-Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window read from the session's Pi JSONL `sessionFile`. `session.messageCount` uses the transcript message count semantics described above. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the daemon's current state for an active remote-control TUI session with a bounded recent transcript window read from the session's Pi JSONL `sessionFile`. When the daemon has a valid TUI-reported `leafId`, the transcript window is filtered to the active branch path instead of raw JSONL file order. `session.messageCount` uses the transcript message count semantics described above. If `messageLimit` is absent, the daemon uses its default recent-message limit. The daemon enforces a maximum page size. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -159,7 +159,7 @@ Response:
 
 `GET /v1/sessions/{sessionId}/messages?before={cursor}&limit={limit}`
 
-Returns the next older transcript page from the session's Pi JSONL `sessionFile` before `cursor`. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive timestamp upper bound, so returned messages satisfy `createdAt < cursor.createdAt`. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
+Returns the next older transcript page from the session's Pi JSONL `sessionFile` before `cursor`. When the daemon has a valid TUI-reported `leafId`, the page is filtered to the active branch path instead of raw JSONL file order. The `before` value must be a cursor previously returned by the daemon. It represents an exclusive timestamp upper bound, so returned messages satisfy `createdAt < cursor.createdAt`. Invalid cursors return `400` with `invalid_cursor`. Invalid non-positive limits return `400` with `invalid_limit`.
 
 Response:
 
@@ -206,6 +206,40 @@ type TranscriptMessage = {
 ```
 
 `content` preserves Pi message blocks. `text` is a simple display summary. Tool-result messages include `toolCallId`, `toolName`, and `isError` when available. Truncation metadata is present only when the daemon intentionally sends a preview.
+
+Tree snapshots use these public shapes:
+
+```ts
+type TreeSnapshot = {
+  sessionId: string;
+  leafId: string | null;
+  snapshotVersion: string;
+  branchVersion: string;
+  entries: TreeEntry[];
+  defaultFilter: "default";
+  filters: Array<"default" | "no-tools" | "user-only" | "labeled-only" | "all">;
+  generatedAt: string;
+  stale?: boolean;
+};
+
+type TreeEntry = {
+  id: string;
+  parentId: string | null;
+  type: "message" | "custom_message" | "branch_summary" | "compaction" | "model_change" | "thinking_level_change" | "label" | "session_info" | "custom" | "other";
+  role?: "user" | "assistant" | "toolResult" | "system" | "custom";
+  customType?: string;
+  toolName?: string;
+  title: string;
+  preview: string;
+  previewTruncated?: boolean;
+  timestamp: string;
+  label?: string;
+  isCurrentLeaf: boolean;
+  isOnActiveBranch: boolean;
+  isForkable: boolean;
+  navigationBehavior: "edit_prompt" | "navigate";
+};
+```
 
 Runtime status snapshots use this shape and may be `null` when the TUI extension has not reported one yet:
 
@@ -306,11 +340,130 @@ If the session has no active TUI owner, the daemon returns `409`:
 }
 ```
 
+`GET /v1/sessions/{sessionId}/tree`
+
+Returns the latest daemon-cached Tree Snapshot for an active remote-control session. This read has no side effects and does not ask the TUI extension to refresh. If the daemon has a cached snapshot that it no longer trusts, it still returns that snapshot with `stale: true` so iOS can display it while requesting refresh. If no snapshot is available yet, the daemon returns `409 tree_state_unavailable`; clients may request refresh with `POST /tree/refresh`.
+
+Response:
+
+```json
+{
+  "snapshot": {
+    "sessionId": "sess_...",
+    "leafId": "entry_leaf_or_null",
+    "snapshotVersion": "treev_...",
+    "branchVersion": "branchv_...",
+    "entries": [
+      {
+        "id": "entry_...",
+        "parentId": null,
+        "type": "message",
+        "role": "user",
+        "title": "user",
+        "preview": "Please inspect the auth flow",
+        "timestamp": "2026-05-09T09:47:00.000Z",
+        "label": "checkpoint",
+        "isCurrentLeaf": false,
+        "isOnActiveBranch": true,
+        "isForkable": true,
+        "navigationBehavior": "edit_prompt"
+      }
+    ],
+    "defaultFilter": "default",
+    "filters": ["default", "no-tools", "user-only", "labeled-only", "all"],
+    "generatedAt": "2026-05-09T09:47:00.000Z"
+  }
+}
+```
+
+Tree snapshots contain the full reduced tree as a flat entry list. Assistant messages with no nonblank text content are omitted unless they are the current leaf or ended with an error/abort stop reason, matching Pi TUI `/tree` visibility. iOS applies the advertised filters and search locally to the remaining entries. `snapshotVersion` and `branchVersion` are opaque strings; clients compare them for equality and must not infer ordering. Entry previews are capped to about 500 characters and include `previewTruncated: true` when clipped. Labels are projected onto their target entries; label entries may also appear as entries when clients use the `all` filter. Snapshots marked `stale: true` are display-only; tree navigation, fork, and clone requests based on stale snapshots are rejected with `tree_state_changed` until a fresh snapshot is available.
+
+`POST /v1/sessions/{sessionId}/tree/refresh`
+
+Queues a request for the owning TUI extension to report a fresh Tree Snapshot. The HTTP response only confirms delivery was accepted; the fresh snapshot arrives later on the session WebSocket as `remote_tree_snapshot`.
+
+Response:
+
+```json
+{ "accepted": true, "requestId": "req_..." }
+```
+
+`POST /v1/sessions/{sessionId}/tree/navigate`
+
+Queues Remote Tree Navigation. The owning TUI extension applies Pi `/tree` selection semantics in the live session. User and custom-message targets branch from their parent and may return `editorText`; other targets navigate directly. Remote Tree Navigation is rejected while the session is busy and is guarded by both the Tree Snapshot Version and Branch Version that iOS based its selection on.
+
+Request:
+
+```json
+{
+  "targetEntryId": "entry_...",
+  "baseSnapshotVersion": "treev_...",
+  "baseBranchVersion": "branchv_...",
+  "baseLeafId": "entry_leaf_or_null",
+  "summaryMode": "none"
+}
+```
+
+`summaryMode` is `"none"` or `"default"`; custom branch-summary focus instructions are not part of the MVP. The HTTP response only confirms that the daemon accepted the command. The final outcome arrives later as `remote_tree_navigation_result`.
+
+Response:
+
+```json
+{ "accepted": true, "requestId": "req_..." }
+```
+
+Immediate errors include `409 session_not_active` and `409 session_busy` when the daemon already knows the owning session is unavailable or busy. Requests containing custom branch-summary focus fields such as `customInstructions` or `replaceInstructions` return `400 custom_summary_instructions_unsupported` in the MVP.
+
+`POST /v1/sessions/{sessionId}/fork`
+
+Queues Remote Fork. The target must be a user-message Tree Entry from the current Tree Snapshot. Remote Fork creates a replacement Pi session before the selected user prompt and returns that prompt text to iOS as `editorText`; it does not prefill the replacement TUI editor and does not auto-send the prompt. Remote Fork is rejected while the session is busy and is guarded by both the Tree Snapshot Version and Branch Version.
+
+Request:
+
+```json
+{
+  "targetEntryId": "entry_user_...",
+  "baseSnapshotVersion": "treev_...",
+  "baseBranchVersion": "branchv_...",
+  "baseLeafId": "entry_leaf_or_null"
+}
+```
+
+Response:
+
+```json
+{ "accepted": true, "requestId": "req_..." }
+```
+
+The final outcome arrives as `remote_fork_result`. On success, the old session stream also receives `remote_session_replaced` with the new active session summary.
+
+`POST /v1/sessions/{sessionId}/clone`
+
+Queues Remote Clone. Remote Clone duplicates the current active branch into a replacement Pi session and returns no draft text. It is rejected while the session is busy and is guarded by both the Tree Snapshot Version and Branch Version.
+
+Request:
+
+```json
+{
+  "baseSnapshotVersion": "treev_...",
+  "baseBranchVersion": "branchv_...",
+  "baseLeafId": "entry_leaf_or_null"
+}
+```
+
+Response:
+
+```json
+{ "accepted": true, "requestId": "req_..." }
+```
+
+The final outcome arrives as `remote_clone_result`. On success, the old session stream also receives `remote_session_replaced` with the new active session summary.
+
 ### Session stream
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, additional bounded `session_state` refreshes when session-level activity changes, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, `remote_compact_result`, `session_closed`, and errors. Live `TranscriptMessage.id` values use the same canonical Pi session-entry IDs as HTTP snapshots whenever the message has a persisted session entry. The stream must not send transcript message events with temporary TUI message IDs. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be delayed or omitted from the stream until they can be reconciled with the session entry; they are recovered by later snapshot/page reads.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, additional bounded `session_state` refreshes when session-level activity or active branch changes, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, tree snapshots, remote-action results, `remote_session_replaced`, `session_closed`, and errors. Live `TranscriptMessage.id` values use the same canonical Pi session-entry IDs as HTTP snapshots whenever the message has a persisted session entry. The stream must not send transcript message events with temporary TUI message IDs. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be delayed or omitted from the stream until they can be reconciled with the session entry; they are recovered by later snapshot/page reads.
 
 Each WebSocket `session_state` contains a primary window of at most 20 recent messages regardless of the HTTP transcript default. If that primary window contains `toolResult` messages, older assistant messages that declare the matching `toolCall` IDs may be prepended as dependency context, so the final message array can exceed 20. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
 
@@ -389,6 +542,19 @@ Remote compact result events:
 
 The daemon sends `remote_compact_result` when the owning TUI extension reports completion or failure for a prior `remote_compact` command. Clients correlate the result with the `requestId` returned by `POST /v1/sessions/{sessionId}/compact`. Compact results are live stream events and are not included in HTTP session snapshots.
 
+Tree and session replacement events:
+
+```json
+{ "type": "remote_tree_snapshot", "requestId": "req_...", "snapshot": { "sessionId": "sess_...", "leafId": "entry_...", "snapshotVersion": "treev_...", "branchVersion": "branchv_...", "entries": [], "defaultFilter": "default", "filters": ["default", "no-tools", "user-only", "labeled-only", "all"], "generatedAt": "2026-05-09T09:47:00.000Z" } }
+{ "type": "remote_tree_navigation_result", "requestId": "req_...", "ok": true, "leafId": "entry_...", "snapshotVersion": "treev_...", "branchVersion": "branchv_...", "editorText": "Earlier prompt text" }
+{ "type": "remote_tree_navigation_result", "requestId": "req_...", "ok": false, "error": "tree_state_changed" }
+{ "type": "remote_fork_result", "requestId": "req_...", "ok": true, "newSession": { "id": "sess_new", "projectId": "proj_...", "isActive": true }, "editorText": "Selected prompt text" }
+{ "type": "remote_clone_result", "requestId": "req_...", "ok": true, "newSession": { "id": "sess_new", "projectId": "proj_...", "isActive": true } }
+{ "type": "remote_session_replaced", "requestId": "req_...", "oldSessionId": "sess_old", "newSession": { "id": "sess_new", "projectId": "proj_...", "isActive": true } }
+```
+
+Remote tree navigation error codes are `session_busy`, `tree_state_changed`, `target_not_found`, `summarization_failed`, `cancelled`, and `aborted`. Remote fork adds `target_not_forkable`. When `tree_state_changed` occurs, the TUI extension also reports a fresh `remote_tree_snapshot` so iOS can retry from current state. After successful tree navigation, the daemon broadcasts a fresh bounded `session_state`; clients should treat `session_state` as the canonical transcript refresh and the navigation result as the action outcome. After successful fork or clone, `remote_session_replaced` gives iOS the new session to subscribe to; the old session stream may then receive `session_closed`.
+
 ## Pi TUI extension ↔ daemon
 
 The TUI control interface is package-internal and used by the Pi extension, not by iOS clients. Loopback TUI requests are accepted without a bearer token; non-loopback callers must provide a valid bearer token. The extension normally calls `127.0.0.1:<configured-port>` even when iOS uses `advertisedBaseUrl` over Tailscale.
@@ -410,7 +576,7 @@ Response payload:
 
 ### Session registration
 
-When `/remote-control` enables a session, the extension registers the current TUI session. The registration `name` is the current Pi TUI session name, if one has been explicitly set. A blank or absent `name` lets the daemon generate an ephemeral API display name. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed transcript message counts from `sessionFile` when available:
+When `/remote-control` enables a session, the extension registers the current TUI session. The registration `name` is the current Pi TUI session name, if one has been explicitly set. A blank or absent `name` lets the daemon generate an ephemeral API display name. The registration `messageCount` is an initial hint from the TUI; public HTTP responses use daemon-computed transcript message counts from `sessionFile` when available. Registration includes the initial tree snapshot when available so branch-aware reads can begin immediately:
 
 ```json
 {
@@ -434,6 +600,16 @@ When `/remote-control` enables a session, the extension registers the current TU
       "usage": { "input": 12000, "output": 3000, "cacheRead": 50000, "cacheWrite": 10000, "cost": { "input": 0.036, "output": 0.045, "cacheRead": 0.015, "cacheWrite": 0.0375, "total": 0.1335 } },
       "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 },
       "updatedAt": "2026-05-09T09:47:00.000Z"
+    },
+    "treeSnapshot": {
+      "sessionId": "sess_...",
+      "leafId": "entry_leaf_or_null",
+      "snapshotVersion": "treev_...",
+      "branchVersion": "branchv_...",
+      "entries": [],
+      "defaultFilter": "default",
+      "filters": ["default", "no-tools", "user-only", "labeled-only", "all"],
+      "generatedAt": "2026-05-09T09:47:00.000Z"
     }
   }
 }
@@ -445,7 +621,11 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 While active, the extension forwards Pi extension events and runtime-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. Before posting message lifecycle events, the extension canonicalizes `message_start`, `message_update`, and `message_end` IDs to the Pi session JSONL message entry ID. If a lifecycle event cannot yet be matched to a unique session entry, the extension buffers it briefly instead of posting a temporary TUI ID. Buffered events are correlated by a TUI temporary message ID when present, otherwise by exact `message.role + message.timestamp`; content hashing and fuzzy text matching are not part of the contract. The daemon normalizes accepted internal events before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. TUI session-name updates are posted as `{ "type": "session_name", "name": "Refactor auth module" }`; a nonblank name replaces any daemon-generated active-session name. Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, tree, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. TUI session-name updates are posted as `{ "type": "session_name", "name": "Refactor auth module" }`; a nonblank name replaces any daemon-generated active-session name.
+
+Tree snapshots are posted as `{ "type": "tree_snapshot", "requestId": "req_...", "snapshot": TreeSnapshot }`. Lightweight branch-state updates may be posted as `{ "type": "tree_state", "leafId": "entry_...", "branchVersion": "branchv_..." }` when the active branch grows and a full snapshot is not needed. `tree_state` is package-internal and is not forwarded to iOS as a public WebSocket event. The daemon stores the latest tree and branch state in active-session process memory. If cached tree state becomes invalid against the session file, transcript reads fall back to linear JSONL order and the daemon marks tree state stale until the TUI reports a fresh snapshot.
+
+Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably. Tree navigation, fork, clone, and session-replacement results are posted with the public result shapes described in the session stream section.
 
 ### Daemon-to-TUI commands
 
@@ -455,9 +635,13 @@ The daemon forwards iOS requests to the owning TUI extension:
 { "type": "remote_prompt", "requestId": "req_...", "text": "...", "streamingBehavior": null }
 { "type": "remote_abort", "requestId": "req_..." }
 { "type": "remote_compact", "requestId": "req_..." }
+{ "type": "remote_tree_refresh", "requestId": "req_..." }
+{ "type": "remote_tree_navigate", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null", "summaryMode": "default" }
+{ "type": "remote_fork", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
+{ "type": "remote_clone", "requestId": "req_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
 ```
 
-Prompt and abort command acknowledgements are not part of the current MVP protocol. Compact completion is reported asynchronously through `remote_compact_result`.
+Prompt and abort command acknowledgements are not part of the current MVP protocol. Compact, tree navigation, fork, and clone completion are reported asynchronously through their corresponding WebSocket result events. Tree refresh completion is reported through `remote_tree_snapshot`.
 
 ## Pi integration boundary
 
@@ -471,4 +655,8 @@ The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
 | Compact | iOS → daemon → owning TUI extension → Pi extension API `ctx.compact()` → TUI-reported `remote_compact_result` → iOS WebSocket. |
-| Stream events | Raw Pi event/status snapshot or remote-action result → TUI extension → daemon normalization/storage/forwarding → iOS WebSocket normalized transcript, status, or result event. |
+| Tree refresh | iOS → daemon → owning TUI extension → TUI-reported `TreeSnapshot` → daemon cache → iOS WebSocket. |
+| Tree navigation | iOS → daemon → owning TUI extension → Pi extension API `ctx.navigateTree()` → TUI-reported navigation result and tree snapshot → daemon branch-aware state/session refresh → iOS WebSocket. |
+| Fork | iOS → daemon → owning TUI extension → Pi extension API `ctx.fork()` → replacement session registration → replacement/result events → iOS WebSocket. |
+| Clone | iOS → daemon → owning TUI extension → Pi extension API `ctx.fork(currentLeaf, { position: "at" })` or equivalent clone flow → replacement session registration → replacement/result events → iOS WebSocket. |
+| Stream events | Raw Pi event/status/tree snapshot or remote-action result → TUI extension → daemon normalization/storage/forwarding → iOS WebSocket normalized transcript, status, tree, or result event. |
