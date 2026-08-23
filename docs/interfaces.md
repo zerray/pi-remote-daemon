@@ -46,6 +46,8 @@ Response:
 
 ### Push Route registration
 
+`GET /v1/push/config` returns `{ "gatewayBaseUrl": "https://..." }` for the authenticated paired device when the daemon has a trusted HTTPS central gateway configured. It returns `503 push_gateway_unconfigured` otherwise. The app uses this discovery response only for direct route management with the gateway; route registration requests cannot override it.
+
 `PUT /v1/devices/self/push-route` registers or replaces the central Push Gateway route for the paired device identified by the request bearer token. The daemon resolves device identity from authentication; callers do not supply a daemon device ID and cannot modify another paired device.
 
 Request:
@@ -68,12 +70,14 @@ Response:
 
 `DELETE /v1/devices/self/push-route` disables completion push for the authenticated paired device and removes the daemon's route capability. The iOS app separately revokes the route through its gateway management credential.
 
-The central Push Gateway contract has two narrow operations:
+The independently deployed central Push Gateway exposes only these narrow routes:
 
-- iOS registers or rotates an APNs device token and receives a non-secret `routeId`, a daemon-facing `routeToken`, and an app-facing route management credential.
-- A daemon presents `routeToken` with an idempotent Agent Settlement containing only `routeId`, `projectId`, and `sessionId`; the gateway renders the fixed generic alert and sends it through APNs.
+- `POST /v1/routes`: iOS registers an APNs device token, APNs environment, and opaque daemon device ID; the response contains non-secret `routeId`, daemon-facing `routeToken`, and app-facing `managementToken`.
+- `PUT /v1/routes/{routeId}/device`: iOS presents `managementToken` to rotate the APNs device token or environment.
+- `DELETE /v1/routes/{routeId}`: iOS presents `managementToken` to revoke the route.
+- `POST /v1/routes/{routeId}/agent-settled`: a daemon presents `routeToken` with an idempotent Agent Settlement containing only `settlementId`, `projectId`, and `sessionId`; caller-provided title, body, and APNs payload fields are ignored.
 
-The gateway owns APNs environment selection, APNs provider authentication, invalid-token cleanup, route revocation, idempotency, and rate limits. The daemon never receives the APNs device token or provider credential.
+The gateway renders the fixed generic alert, owns APNs provider authentication and environment routing, revokes invalid APNs tokens, deduplicates by route and settlement ID, and rate-limits each route. The daemon never receives the APNs device token or provider credential.
 
 ### Projects
 

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createPairingCode, hashPairingCode, canClaimPairingCode } from "../auth/pairing.js";
 import { issueDeviceToken, verifyDeviceToken } from "../auth/tokens.js";
 import type { PairClaimResponse, PairCodeResponse } from "../server/http.js";
-import type { PairingCode } from "../types.js";
+import type { DevicePushRoute, PairingCode } from "../types.js";
 import { migrateSchemaSql } from "./schema.js";
 
 export type DaemonStore = {
@@ -11,11 +11,19 @@ export type DaemonStore = {
   createPairingCode(now: Date, ttlMs: number): Promise<PairCodeResponse>;
   claimPairingCode(rawCode: string, deviceName: string, now: Date): Promise<PairClaimResponse | undefined>;
   authenticateToken(rawToken: string): Promise<boolean>;
+  resolveDeviceId(rawToken: string): Promise<string | undefined>;
+  upsertPushRoute(route: DevicePushRoute): Promise<void>;
+  removePushRoute(deviceId: string): Promise<boolean>;
+  listEnabledPushRoutes(): Promise<DevicePushRoute[]>;
 };
 
 export function openDaemonStore(stateDir: string): DaemonStore {
   const database = new DatabaseSync(join(stateDir, "daemon.sqlite"));
-  for (const sql of migrateSchemaSql(0)) database.exec(sql);
+  const hasMeta = database.prepare("select 1 from sqlite_master where type = 'table' and name = 'meta'").get();
+  const storedVersion = hasMeta
+    ? Number.parseInt((database.prepare("select value from meta where key = 'schema_version'").get() as { value?: string } | undefined)?.value ?? "0", 10)
+    : 0;
+  for (const sql of migrateSchemaSql(Number.isFinite(storedVersion) ? storedVersion : 0)) database.exec(sql);
 
   return {
     close() {
@@ -51,6 +59,41 @@ export function openDaemonStore(stateDir: string): DaemonStore {
         if (await verifyDeviceToken(rawToken, row.tokenHash)) return true;
       }
       return false;
+    },
+
+    async resolveDeviceId(rawToken: string): Promise<string | undefined> {
+      const rows = database.prepare("select id, token_hash as tokenHash from devices where revoked_at is null").all() as Array<{ id: string; tokenHash: string }>;
+      for (const row of rows) {
+        if (await verifyDeviceToken(rawToken, row.tokenHash)) return row.id;
+      }
+      return undefined;
+    },
+
+    async upsertPushRoute(route: DevicePushRoute): Promise<void> {
+      database.prepare(`
+        insert into device_push_routes (device_id, route_id, route_token, enabled, updated_at)
+        values (?, ?, ?, ?, ?)
+        on conflict(device_id) do update set
+          route_id = excluded.route_id,
+          route_token = excluded.route_token,
+          enabled = excluded.enabled,
+          updated_at = excluded.updated_at
+      `).run(route.deviceId, route.routeId, route.routeToken, route.enabled ? 1 : 0, route.updatedAt);
+    },
+
+    async removePushRoute(deviceId: string): Promise<boolean> {
+      const result = database.prepare("delete from device_push_routes where device_id = ?").run(deviceId);
+      return Number(result.changes) > 0;
+    },
+
+    async listEnabledPushRoutes(): Promise<DevicePushRoute[]> {
+      const rows = database.prepare(`
+        select device_id as deviceId, route_id as routeId, route_token as routeToken, enabled, updated_at as updatedAt
+        from device_push_routes
+        where enabled = 1
+        order by device_id
+      `).all() as Array<Omit<DevicePushRoute, "enabled"> & { enabled: number }>;
+      return rows.map((row) => ({ ...row, enabled: row.enabled === 1 }));
     },
   };
 }

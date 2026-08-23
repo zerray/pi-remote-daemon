@@ -3,6 +3,7 @@ export type IsoTimestamp = string;
 export type DaemonConfig = {
   bindAddress: string;
   advertisedBaseUrl?: string;
+  pushGatewayBaseUrl?: string;
 };
 
 export type DaemonState = {
@@ -21,6 +22,14 @@ export type PairedDevice = {
   createdAt: IsoTimestamp;
   lastSeenAt?: IsoTimestamp;
   revokedAt?: IsoTimestamp;
+};
+
+export type DevicePushRoute = {
+  deviceId: string;
+  routeId: string;
+  routeToken: string;
+  enabled: boolean;
+  updatedAt: IsoTimestamp;
 };
 
 export type PairingCode = {
@@ -120,6 +129,35 @@ export type RuntimeStatus = {
   updatedAt: IsoTimestamp;
 };
 
+export type AgentSettlement = {
+  settlementId: string;
+  sessionId: string;
+  projectId: string;
+};
+
+export type RemoteModelSummary = {
+  provider: string;
+  modelId: string;
+  name?: string;
+  reasoning: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  isScoped: boolean;
+};
+
+export type ModelCatalogSnapshot = {
+  currentModel: RemoteModelSummary | null;
+  models: RemoteModelSummary[];
+  catalogVersion: string;
+  generatedAt: IsoTimestamp;
+};
+
+export type RemoteModelCatalogEvent = { type: "remote_model_catalog"; requestId?: string; catalog: ModelCatalogSnapshot };
+
+export type RemoteModelSelectResultEvent =
+  | { type: "remote_model_select_result"; requestId: string; ok: true; model: RemoteModelSummary; catalogVersion: string }
+  | { type: "remote_model_select_result"; requestId: string; ok: false; error: "session_busy" | "model_catalog_changed" | "model_not_found" | "model_unavailable" | "selection_failed" };
+
 export type RemoteTreeSnapshotEvent = { type: "remote_tree_snapshot"; requestId?: string; snapshot: TreeSnapshot };
 
 export type RemoteTreeNavigationResultEvent =
@@ -143,6 +181,8 @@ export type RemoteCompactResultEvent =
 export type TranscriptStreamEvent =
   | { type: "session_state"; state: unknown }
   | { type: "runtime_status"; status: RuntimeStatus }
+  | RemoteModelCatalogEvent
+  | RemoteModelSelectResultEvent
   | RemoteTreeSnapshotEvent
   | RemoteTreeNavigationResultEvent
   | RemoteForkResultEvent

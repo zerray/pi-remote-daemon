@@ -12,7 +12,7 @@ import {
 } from "../transcript-pagination.js";
 import { INITIAL_WEBSOCKET_SESSION_MESSAGE_LIMIT, previewInitialSessionState } from "../transcript-preview.js";
 import { normalizeTuiEvent } from "../transcript-stream.js";
-import type { DaemonConfig, RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
+import type { AgentSettlement, DaemonConfig, DevicePushRoute, RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteModelCatalogEvent, RemoteModelSelectResultEvent, RemoteModelSummary, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent, RemoteTreeSnapshotEvent, RuntimeStatus } from "../types.js";
 
 export type RemoteSessionSummary = {
   id: string;
@@ -77,15 +77,23 @@ export type PairService = {
   claimPairingCode(request: PairClaimRequest): Promise<PairClaimResponse>;
 };
 
+export type PushRouteService = {
+  upsertPushRoute(route: DevicePushRoute): Promise<void>;
+  removePushRoute(deviceId: string): Promise<boolean>;
+};
+
 export type StartServerOptions = {
   stateDir: string;
   config: DaemonConfig;
   piVersion?: string;
   daemonVersion?: string;
   authenticateToken?: (token: string) => boolean | Promise<boolean>;
+  resolveDeviceId?: (token: string) => string | undefined | Promise<string | undefined>;
+  pushRouteService?: PushRouteService;
   sessionService?: SessionService;
   activeSessions?: ActiveSessionRegistry;
   pairService?: PairService;
+  notifyAgentSettlement?: (settlement: AgentSettlement) => Promise<void>;
   sessionSweepIntervalMs?: number;
 };
 
@@ -174,7 +182,15 @@ async function handleHttpRequest(
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await readJsonBody(request)) as Parameters<ActiveSessionRegistry["registerSession"]>[0];
+    const rawBody = (await readJsonBody(request)) as Record<string, unknown>;
+    const { modelCatalog: rawModelCatalog, ...registrationFields } = rawBody;
+    const modelCatalog = rawModelCatalog === undefined
+      ? undefined
+      : reducedRemoteModelCatalogEvent({ type: "remote_model_catalog", catalog: rawModelCatalog })?.catalog;
+    const body = {
+      ...registrationFields,
+      ...(modelCatalog ? { modelCatalog } : {}),
+    } as Parameters<ActiveSessionRegistry["registerSession"]>[0];
     const session = options.activeSessions?.registerSession(body);
     writeJson(response, session ? 200 : 503, session ? { session } : { error: "active_sessions_unavailable" });
     return;
@@ -220,6 +236,32 @@ async function handleHttpRequest(
       return;
     }
     const event = await readJsonBody(request);
+    if ((event as { type?: unknown } | null)?.type === "agent_settled") {
+      const settlementId = (event as { settlementId?: unknown }).settlementId;
+      if (typeof settlementId !== "string" || !settlementId) {
+        writeJson(response, 400, { error: "invalid_agent_settlement" });
+        return;
+      }
+      const settlement = options.activeSessions?.acceptAgentSettlement(sessionId, settlementId);
+      if (settlement && options.notifyAgentSettlement) {
+        void options.notifyAgentSettlement(settlement).catch(() => undefined);
+      }
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
+    const modelCatalogEvent = reducedRemoteModelCatalogEvent(event);
+    if (modelCatalogEvent) {
+      options.activeSessions?.updateModelCatalog(sessionId, modelCatalogEvent.catalog);
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, modelCatalogEvent));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
+    const modelSelectResultEvent = reducedRemoteModelSelectResultEvent(event);
+    if (modelSelectResultEvent) {
+      streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, modelSelectResultEvent));
+      writeJson(response, 200, { accepted: true });
+      return;
+    }
     if (isRuntimeStatusEvent(event)) {
       const changed = options.activeSessions?.updateRuntimeStatus(sessionId, event.status) ?? false;
       if (changed) streamHub.get(sessionId)?.forEach((webSocket) => sendWebSocketJson(webSocket, { type: "runtime_status", status: event.status }));
@@ -299,6 +341,56 @@ async function handleHttpRequest(
     return;
   }
 
+  if ((request.method === "GET" && pathname === "/v1/push/config")
+    || ((request.method === "PUT" || request.method === "DELETE") && pathname === "/v1/devices/self/push-route")) {
+    const authorization = request.headers.authorization;
+    const rawToken = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+    const deviceId = rawToken && options.resolveDeviceId ? await options.resolveDeviceId(rawToken) : undefined;
+    if (!deviceId) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    if (request.method === "GET") {
+      let gatewayUrl: URL | undefined;
+      try {
+        gatewayUrl = options.config.pushGatewayBaseUrl ? new URL(options.config.pushGatewayBaseUrl) : undefined;
+      } catch {
+        gatewayUrl = undefined;
+      }
+      if (!gatewayUrl || gatewayUrl.protocol !== "https:") {
+        writeJson(response, 503, { error: "push_gateway_unconfigured" });
+        return;
+      }
+      writeJson(response, 200, { gatewayBaseUrl: gatewayUrl.toString().replace(/\/$/u, "") });
+      return;
+    }
+    if (!options.pushRouteService) {
+      writeJson(response, 503, { error: "push_routes_unavailable" });
+      return;
+    }
+    if (request.method === "DELETE") {
+      const removed = await options.pushRouteService.removePushRoute(deviceId);
+      writeJson(response, 200, { removed });
+      return;
+    }
+    const body = (await readJsonBody(request)) as Record<string, unknown>;
+    const routeId = typeof body.routeId === "string" ? body.routeId : "";
+    const routeToken = typeof body.routeToken === "string" ? body.routeToken : "";
+    if (!routeId || !routeToken || body.enabled !== true) {
+      writeJson(response, 400, { error: "invalid_push_route" });
+      return;
+    }
+    await options.pushRouteService.upsertPushRoute({
+      deviceId,
+      routeId,
+      routeToken,
+      enabled: true,
+      updatedAt: new Date().toISOString(),
+    });
+    writeJson(response, 200, { registered: true, routeId });
+    return;
+  }
+
   if (request.method === "GET" && pathname === "/v1/projects") {
     if (!(await isAuthorized(request, options))) {
       writeJson(response, 401, { error: "unauthorized" });
@@ -306,6 +398,80 @@ async function handleHttpRequest(
     }
 
     writeJson(response, 200, { projects: options.activeSessions?.listProjects() ?? [] });
+    return;
+  }
+
+  const modelCatalogRefreshMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/models\/refresh$/);
+  if (request.method === "POST" && modelCatalogRefreshMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    const sessionId = decodeURIComponent(modelCatalogRefreshMatch[1] ?? "");
+    const requestId = nextRequestId();
+    if (!options.activeSessions?.enqueueCommand(sessionId, { type: "remote_model_catalog_refresh", requestId })) {
+      writeJson(response, 409, { error: "session_not_active" });
+      return;
+    }
+    writeJson(response, 200, { accepted: true, requestId });
+    return;
+  }
+
+  const modelSelectionMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/model$/);
+  if (request.method === "POST" && modelSelectionMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    const sessionId = decodeURIComponent(modelSelectionMatch[1] ?? "");
+    const state = options.activeSessions?.getSessionState(sessionId, { messageLimit: 1 });
+    if (!state) {
+      writeJson(response, 409, { error: "session_not_active" });
+      return;
+    }
+    if (state.isStreaming) {
+      writeJson(response, 409, { error: "session_busy" });
+      return;
+    }
+    const catalogResult = options.activeSessions?.getModelCatalog(sessionId);
+    if (!catalogResult?.ok) {
+      writeJson(response, 409, { error: catalogResult?.error ?? "model_catalog_unavailable" });
+      return;
+    }
+    const body = (await readJsonBody(request)) as Record<string, unknown>;
+    const provider = typeof body.provider === "string" ? body.provider : "";
+    const modelId = typeof body.modelId === "string" ? body.modelId : "";
+    const baseCatalogVersion = typeof body.baseCatalogVersion === "string" ? body.baseCatalogVersion : "";
+    if (catalogResult.catalog.catalogVersion !== baseCatalogVersion) {
+      writeJson(response, 409, { error: "model_catalog_changed" });
+      return;
+    }
+    if (!catalogResult.catalog.models.some((model) => model.provider === provider && model.modelId === modelId)) {
+      writeJson(response, 409, { error: "model_not_found" });
+      return;
+    }
+    const requestId = nextRequestId();
+    if (!options.activeSessions?.enqueueCommand(sessionId, { type: "remote_model_select", requestId, provider, modelId, baseCatalogVersion })) {
+      writeJson(response, 409, { error: "session_not_active" });
+      return;
+    }
+    writeJson(response, 200, { accepted: true, requestId });
+    return;
+  }
+
+  const modelCatalogMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/models$/);
+  if (request.method === "GET" && modelCatalogMatch) {
+    if (!(await isAuthorized(request, options))) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    const sessionId = decodeURIComponent(modelCatalogMatch[1] ?? "");
+    const result = options.activeSessions?.getModelCatalog(sessionId) ?? { ok: false as const, error: "session_not_active" as const };
+    if (!result.ok) {
+      writeJson(response, 409, { error: result.error });
+      return;
+    }
+    writeJson(response, 200, { catalog: result.catalog });
     return;
   }
 
@@ -701,6 +867,61 @@ async function isAuthorized(request: IncomingMessage, options: StartServerOption
 
 function isLoopbackRemoteAddress(address: string | undefined): boolean {
   return Boolean(address && (address === "::1" || address === "127.0.0.1" || address.startsWith("127.") || address.startsWith("::ffff:127.")));
+}
+
+function reducedRemoteModelCatalogEvent(event: unknown): RemoteModelCatalogEvent | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const record = event as Record<string, unknown>;
+  const catalog = record.catalog && typeof record.catalog === "object" ? record.catalog as Record<string, unknown> : undefined;
+  if (record.type !== "remote_model_catalog"
+    || (record.requestId !== undefined && typeof record.requestId !== "string")
+    || !catalog
+    || !Array.isArray(catalog.models)
+    || typeof catalog.catalogVersion !== "string"
+    || typeof catalog.generatedAt !== "string") return undefined;
+  const models = catalog.models.map(reducedRemoteModelSummary);
+  if (models.some((model) => model === undefined)) return undefined;
+  const currentModel = catalog.currentModel === null ? null : reducedRemoteModelSummary(catalog.currentModel);
+  if (currentModel === undefined) return undefined;
+  return {
+    type: "remote_model_catalog",
+    ...(typeof record.requestId === "string" ? { requestId: record.requestId } : {}),
+    catalog: {
+      currentModel,
+      models: models as RemoteModelSummary[],
+      catalogVersion: catalog.catalogVersion,
+      generatedAt: catalog.generatedAt,
+    },
+  };
+}
+
+function reducedRemoteModelSummary(value: unknown): RemoteModelSummary | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const model = value as Record<string, unknown>;
+  if (typeof model.provider !== "string" || typeof model.modelId !== "string" || typeof model.reasoning !== "boolean" || typeof model.isScoped !== "boolean") return undefined;
+  return {
+    provider: model.provider,
+    modelId: model.modelId,
+    ...(typeof model.name === "string" ? { name: model.name } : {}),
+    reasoning: model.reasoning,
+    ...(typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow) ? { contextWindow: model.contextWindow } : {}),
+    ...(typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens) ? { maxTokens: model.maxTokens } : {}),
+    isScoped: model.isScoped,
+  };
+}
+
+function reducedRemoteModelSelectResultEvent(event: unknown): RemoteModelSelectResultEvent | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "remote_model_select_result" || typeof record.requestId !== "string") return undefined;
+  if (record.ok === true) {
+    const model = reducedRemoteModelSummary(record.model);
+    if (!model || typeof record.catalogVersion !== "string") return undefined;
+    return { type: "remote_model_select_result", requestId: record.requestId, ok: true, model, catalogVersion: record.catalogVersion };
+  }
+  const errors = new Set(["session_busy", "model_catalog_changed", "model_not_found", "model_unavailable", "selection_failed"]);
+  if (record.ok !== false || typeof record.error !== "string" || !errors.has(record.error)) return undefined;
+  return { type: "remote_model_select_result", requestId: record.requestId, ok: false, error: record.error as Extract<RemoteModelSelectResultEvent, { ok: false }>["error"] };
 }
 
 function isRuntimeStatusEvent(event: unknown): event is { type: "runtime_status"; status: RuntimeStatus } {

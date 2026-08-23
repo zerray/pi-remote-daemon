@@ -77,7 +77,7 @@ The daemon does not use Pi SDK or RPC to discover, open, prompt, stream, or abor
 
 ## Central Push Gateway boundary
 
-The Push Gateway is an independently deployed provider service, not a daemon mode and not a Pi extension. It issues revocable Push Routes to Pi Relay installations, owns APNs device tokens and provider credentials, renders the fixed generic completion payload, handles APNs responses, and enforces idempotency and rate limits. The daemon can invoke only the constrained Agent Settlement operation associated with a registered route.
+The Push Gateway is an independently deployed provider service exposed by the separate `pi-relay-push-gateway` executable, not a daemon mode and not a Pi extension. It issues revocable Push Routes to Pi Relay installations, stores its own route/idempotency database under `PI_PUSH_GATEWAY_STATE_DIR`, owns APNs device tokens and provider credentials, renders the fixed generic completion payload, handles APNs responses, and enforces idempotency and rate limits. The daemon can invoke only the constrained Agent Settlement operation associated with a registered route.
 
 ## Session runtime model
 

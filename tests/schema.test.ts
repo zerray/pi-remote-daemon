@@ -8,11 +8,18 @@ describe("database schema", () => {
     expect(sql).toContain("create table if not exists meta");
     expect(sql).toContain("create table if not exists devices");
     expect(sql).toContain("create table if not exists pairing_codes");
+    expect(sql).toContain("create table if not exists device_push_routes");
     expect(sql).not.toContain("create table if not exists projects");
     expect(sql).not.toContain("create table if not exists session_index");
   });
 
   it("creates initial schema from version zero", () => {
     expect(migrateSchemaSql(0, SCHEMA_VERSION).length).toBeGreaterThan(0);
+  });
+
+  it("migrates existing daemon state to Push Routes", () => {
+    const sql = migrateSchemaSql(1, 2).join("\n");
+    expect(sql).toContain("device_push_routes");
+    expect(sql).toContain("schema_version', '2");
   });
 });

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { activeBranchEntryIds, activeBranchEntryIdsFromSessionFile, readSessionTranscriptMessages, visibleConversationMessageCount } from "./session-transcript.js";
 import { DEFAULT_TRANSCRIPT_PAGE_LIMIT, olderTranscriptPage, recentTranscriptWindow, type TranscriptPage } from "./transcript-pagination.js";
-import type { RuntimeStatus, ToolCallStatus, TreeSnapshot } from "./types.js";
+import type { AgentSettlement, ModelCatalogSnapshot, RuntimeStatus, ToolCallStatus, TreeSnapshot } from "./types.js";
 
 export type ActiveProject = {
   id: string;
@@ -20,6 +20,7 @@ export type ActiveSessionRegistration = {
   isStreaming: boolean;
   updatedAt: string;
   runtimeStatus?: RuntimeStatus;
+  modelCatalog?: ModelCatalogSnapshot;
   treeSnapshot?: TreeSnapshot;
   treeStateStale?: boolean;
   entries?: unknown[];
@@ -40,6 +41,8 @@ export type RemoteTuiCommand =
   | { type: "remote_prompt"; requestId: string; text: string; streamingBehavior?: "steer" | "followUp" | null }
   | { type: "remote_abort"; requestId: string }
   | { type: "remote_compact"; requestId: string }
+  | { type: "remote_model_catalog_refresh"; requestId: string }
+  | { type: "remote_model_select"; requestId: string; provider: string; modelId: string; baseCatalogVersion: string }
   | { type: "remote_tree_refresh"; requestId: string }
   | { type: "remote_tree_navigate"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null; summaryMode: "none" | "default" }
   | { type: "remote_fork"; requestId: string; targetEntryId: string; baseSnapshotVersion: string; baseBranchVersion: string; baseLeafId: string | null }
@@ -56,6 +59,10 @@ export type ActiveSessionState = TranscriptPage & {
 export type ActiveSessionTreeSnapshotResult =
   | { ok: true; snapshot: TreeSnapshot }
   | { ok: false; error: "session_not_active" | "tree_state_unavailable" };
+
+export type ActiveSessionModelCatalogResult =
+  | { ok: true; catalog: ModelCatalogSnapshot }
+  | { ok: false; error: "session_not_active" | "model_catalog_unavailable" };
 
 export type ActiveSessionTreeState = {
   leafId: string | null;
@@ -80,11 +87,14 @@ export type ActiveSessionRegistry = {
   listProjectSessions(projectId: string): ActiveSessionSummary[];
   getSessionState(sessionId: string, options?: { messageLimit?: number }): ActiveSessionState | undefined;
   getSessionMessages(sessionId: string, beforeCursor: string, options?: { limit?: number }): TranscriptPage | undefined;
+  getModelCatalog(sessionId: string): ActiveSessionModelCatalogResult;
+  updateModelCatalog(sessionId: string, catalog: ModelCatalogSnapshot): boolean;
   getTreeSnapshot(sessionId: string): ActiveSessionTreeSnapshotResult;
   updateTreeSnapshot(sessionId: string, snapshot: TreeSnapshot): boolean;
   updateTreeState(sessionId: string, state: ActiveSessionTreeState): boolean;
   updateRuntimeStatus(sessionId: string, status: RuntimeStatus): boolean;
   updateSessionActivity(sessionId: string, activity: { isStreaming: boolean; pendingMessageCount?: number }): boolean;
+  acceptAgentSettlement(sessionId: string, settlementId: string): AgentSettlement | undefined;
   enqueueCommand(sessionId: string, command: RemoteTuiCommand): boolean;
   takeCommands(sessionId: string): RemoteTuiCommand[];
 };
@@ -104,6 +114,7 @@ type StoredActiveSession = ActiveSessionRegistration & {
   pendingMessageCount: number;
   commands: RemoteTuiCommand[];
   treeState?: ActiveSessionTreeState;
+  lastSettlementId?: string;
   lastSeenAtMs: number;
 };
 
@@ -218,6 +229,23 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       return olderTranscriptPage(readSessionMessages(session), beforeCursor, options?.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT);
     },
 
+    getModelCatalog(sessionId) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return { ok: false, error: "session_not_active" };
+      if (!session.modelCatalog) return { ok: false, error: "model_catalog_unavailable" };
+      return { ok: true, catalog: session.modelCatalog };
+    },
+
+    updateModelCatalog(sessionId, catalog) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session) return false;
+      if (JSON.stringify(session.modelCatalog ?? null) === JSON.stringify(catalog)) return false;
+      session.modelCatalog = catalog;
+      return true;
+    },
+
     getTreeSnapshot(sessionId) {
       pruneInactiveSessions();
       const session = sessions.get(sessionId);
@@ -269,6 +297,14 @@ export function createActiveSessionRegistry(options: ActiveSessionRegistryOption
       session.isStreaming = activity.isStreaming;
       session.pendingMessageCount = nextPendingMessageCount;
       return changed;
+    },
+
+    acceptAgentSettlement(sessionId, settlementId) {
+      pruneInactiveSessions();
+      const session = sessions.get(sessionId);
+      if (!session || !settlementId || session.lastSettlementId === settlementId) return undefined;
+      session.lastSettlementId = settlementId;
+      return { settlementId, sessionId, projectId: session.project.id };
     },
 
     enqueueCommand(sessionId, command) {

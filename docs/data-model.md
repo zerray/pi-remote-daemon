@@ -135,6 +135,10 @@ type DevicePushRoute = {
 
 A Push Route is a gateway-issued capability associated with the paired device resolved from daemon bearer authentication. `routeId` is non-secret and is returned in APNs custom payloads so iOS can resolve the paired daemon. `routeToken` authorizes only the gateway's fixed generic Agent Settlement notification for this route. APNs device tokens and APNs provider keys are never daemon data.
 
+## Push Gateway storage
+
+The independently deployed Gateway stores `push-gateway.sqlite` under `PI_PUSH_GATEWAY_STATE_DIR`. Its `push_routes` rows contain the opaque route ID, salted hashes of separate route and management capabilities, APNs device token/environment, opaque daemon device ID, timestamps, and revocation state. Its `push_settlements` rows use `(route_id, settlement_id)` as the idempotency key and record creation/delivery timestamps for retries and per-route rate limits. APNs provider keys are read from the operator-supplied file path into process memory and are not database fields.
+
 ## Active project
 
 ```ts

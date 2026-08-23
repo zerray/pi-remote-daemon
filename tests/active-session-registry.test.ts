@@ -89,6 +89,33 @@ describe("active TUI session registry", () => {
     expect(registry.listProjects()).toEqual([]);
   });
 
+  it("accepts each Agent Settlement once for an active session", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    expect(registry.acceptAgentSettlement("sess_1", "settle_1")).toEqual({
+      settlementId: "settle_1",
+      sessionId: "sess_1",
+      projectId: "proj_1",
+    });
+    expect(registry.acceptAgentSettlement("sess_1", "settle_1")).toBeUndefined();
+    expect(registry.acceptAgentSettlement("missing", "settle_2")).toBeUndefined();
+    expect(registry.acceptAgentSettlement("sess_1", "settle_2")).toEqual({
+      settlementId: "settle_2",
+      sessionId: "sess_1",
+      projectId: "proj_1",
+    });
+  });
+
   it("queues remote commands for active TUI sessions", () => {
     const registry = createActiveSessionRegistry();
     registry.registerSession({
@@ -135,6 +162,36 @@ describe("active TUI session registry", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("stores the owning TUI model catalog only for an active session", () => {
+    const registry = createActiveSessionRegistry();
+    registry.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    const catalog = {
+      currentModel: { provider: "anthropic", modelId: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 8192, isScoped: true },
+      models: [
+        { provider: "anthropic", modelId: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 8192, isScoped: true },
+        { provider: "openai", modelId: "gpt-5", name: "GPT-5", reasoning: true, contextWindow: 400000, maxTokens: 128000, isScoped: false },
+      ],
+      catalogVersion: "modelsv_known",
+      generatedAt: "2026-05-09T09:47:00.000Z",
+    };
+
+    expect(registry.getModelCatalog("sess_1")).toEqual({ ok: false, error: "model_catalog_unavailable" });
+    expect(registry.updateModelCatalog("missing", catalog)).toBe(false);
+    expect(registry.updateModelCatalog("sess_1", catalog)).toBe(true);
+    expect(registry.updateModelCatalog("sess_1", catalog)).toBe(false);
+    expect(registry.getModelCatalog("sess_1")).toEqual({ ok: true, catalog });
+    expect(registry.getModelCatalog("missing")).toEqual({ ok: false, error: "session_not_active" });
   });
 
   it("uses refreshed tree snapshots to recover from stale active-branch leaves", async () => {

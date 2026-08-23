@@ -15,6 +15,16 @@ const runtimeStatus = {
   updatedAt: "2026-05-09T09:47:00.000Z",
 };
 
+const modelCatalog = {
+  currentModel: { provider: "anthropic", modelId: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 8192, isScoped: true },
+  models: [
+    { provider: "anthropic", modelId: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true, contextWindow: 200000, maxTokens: 8192, isScoped: true },
+    { provider: "openai", modelId: "gpt-5", name: "GPT-5", reasoning: true, contextWindow: 400000, maxTokens: 128000, isScoped: false },
+  ],
+  catalogVersion: "modelsv_known",
+  generatedAt: "2026-05-09T09:47:00.000Z",
+};
+
 async function withServer<T>(
   fn: (baseUrl: string) => Promise<T>,
   overrides: Partial<StartServerOptions> = {},
@@ -95,12 +105,17 @@ describe("daemon HTTP server", () => {
             pid: 1234,
             messageCount: 0,
             isStreaming: false,
+            modelCatalog: {
+              ...modelCatalog,
+              models: modelCatalog.models.map((model) => ({ ...model, apiKey: "must-not-leak", baseUrl: "https://secret.example" })),
+            },
             updatedAt: "2026-05-09T00:00:00.000Z",
           }),
         });
         expect(registerResponse.status).toBe(200);
         await expect(registerResponse.json()).resolves.toMatchObject({ session: { id: "sess_1", projectId: "proj_1" } });
         expect(activeSessions.listProjects()).toEqual([{ id: "proj_1", name: "Example", path: "/repo/example" }]);
+        expect(activeSessions.getModelCatalog("sess_1")).toEqual({ ok: true, catalog: modelCatalog });
 
         const unregisterResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1`, {
           method: "DELETE",
@@ -112,6 +127,68 @@ describe("daemon HTTP server", () => {
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
     );
+  });
+
+  it("registers and removes only the authenticated paired device Push Route", async () => {
+    const upsertPushRoute = vi.fn(async () => undefined);
+    const removePushRoute = vi.fn(async () => true);
+
+    await withServer(
+      async (baseUrl) => {
+        const unauthorized = await fetch(`${baseUrl}/v1/push/config`);
+        expect(unauthorized.status).toBe(401);
+
+        const configResponse = await fetch(`${baseUrl}/v1/push/config`, {
+          headers: { authorization: "Bearer device-token" },
+        });
+        expect(configResponse.status).toBe(200);
+        await expect(configResponse.json()).resolves.toEqual({ gatewayBaseUrl: "https://push.pi-relay.example" });
+
+        const disabledPutResponse = await fetch(`${baseUrl}/v1/devices/self/push-route`, {
+          method: "PUT",
+          headers: { authorization: "Bearer device-token", "content-type": "application/json" },
+          body: JSON.stringify({ routeId: "route_1", routeToken: "route_secret_1", enabled: false }),
+        });
+        expect(disabledPutResponse.status).toBe(400);
+
+        const putResponse = await fetch(`${baseUrl}/v1/devices/self/push-route`, {
+          method: "PUT",
+          headers: { authorization: "Bearer device-token", "content-type": "application/json" },
+          body: JSON.stringify({ deviceId: "dev_attacker", routeId: "route_1", routeToken: "route_secret_1", enabled: true }),
+        });
+        expect(putResponse.status).toBe(200);
+        expect(upsertPushRoute).toHaveBeenCalledWith({
+          deviceId: "dev_authenticated",
+          routeId: "route_1",
+          routeToken: "route_secret_1",
+          enabled: true,
+          updatedAt: expect.any(String),
+        });
+
+        const deleteResponse = await fetch(`${baseUrl}/v1/devices/self/push-route`, {
+          method: "DELETE",
+          headers: { authorization: "Bearer device-token" },
+        });
+        expect(deleteResponse.status).toBe(200);
+        expect(removePushRoute).toHaveBeenCalledWith("dev_authenticated");
+      },
+      {
+        config: { bindAddress: "127.0.0.1:0", pushGatewayBaseUrl: "https://push.pi-relay.example" },
+        resolveDeviceId: (token) => token === "device-token" ? "dev_authenticated" : undefined,
+        pushRouteService: { upsertPushRoute, removePushRoute },
+      },
+    );
+  });
+
+  it("does not advertise a non-HTTPS central Push Gateway", async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/push/config`, { headers: { authorization: "Bearer device-token" } });
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ error: "push_gateway_unconfigured" });
+    }, {
+      config: { bindAddress: "127.0.0.1:0", pushGatewayBaseUrl: "http://public.example" },
+      resolveDeviceId: () => "dev_authenticated",
+    });
   });
 
   it("does not expose TUI session resume synchronization", async () => {
@@ -260,6 +337,206 @@ describe("daemon HTTP server", () => {
         webSocket.close();
       },
       { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("serves the TUI-owned model catalog and queues an exact idle-session selection", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      modelCatalog,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const unauthorized = await fetch(`${baseUrl}/v1/sessions/sess_1/models`);
+        expect(unauthorized.status).toBe(401);
+
+        const catalogResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/models`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        expect(catalogResponse.status).toBe(200);
+        await expect(catalogResponse.json()).resolves.toEqual({ catalog: modelCatalog });
+
+        const selectionResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/model`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify({ provider: "openai", modelId: "gpt-5", baseCatalogVersion: "modelsv_known" }),
+        });
+        expect(selectionResponse.status).toBe(200);
+        const selectionBody = await selectionResponse.json() as { requestId: string };
+        expect(selectionBody).toEqual({ accepted: true, requestId: expect.stringMatching(/^req_/) });
+        expect(activeSessions.takeCommands("sess_1")).toEqual([{
+          type: "remote_model_select",
+          requestId: selectionBody.requestId,
+          provider: "openai",
+          modelId: "gpt-5",
+          baseCatalogVersion: "modelsv_known",
+        }]);
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("caches and broadcasts a refreshed Model Catalog Snapshot from the owning TUI", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const webSocket = new WebSocket(`${baseUrl.replace("http://", "ws://")}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+
+        const event = { type: "remote_model_catalog", requestId: "req_refresh", catalog: modelCatalog };
+        const eventResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+          method: "POST",
+          headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        expect(eventResponse.status).toBe(200);
+        await vi.waitFor(() => expect(messages).toContainEqual(event));
+
+        const catalogResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/models`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        await expect(catalogResponse.json()).resolves.toEqual({ catalog: modelCatalog });
+        webSocket.close();
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("strips connection and credential fields from TUI model catalog events", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1", piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl", pid: 1234, messageCount: 0, isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    await withServer(async (baseUrl) => {
+      const unsafeCatalog = {
+        ...modelCatalog,
+        models: modelCatalog.models.map((model) => ({ ...model, apiKey: "must-not-leak", baseUrl: "https://secret.example", headers: { authorization: "must-not-leak" } })),
+        providerEnvironment: { SECRET: "must-not-leak" },
+      };
+      const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        body: JSON.stringify({ type: "remote_model_catalog", catalog: unsafeCatalog }),
+      });
+      expect(response.status).toBe(200);
+
+      const catalogResponse = await fetch(`${baseUrl}/v1/sessions/sess_1/models`, { headers: { authorization: "Bearer test-token" } });
+      const publicBody = await catalogResponse.json();
+      expect(publicBody).toEqual({ catalog: modelCatalog });
+      expect(JSON.stringify(publicBody)).not.toContain("must-not-leak");
+      expect(JSON.stringify(publicBody)).not.toContain("baseUrl");
+    }, { activeSessions, authenticateToken: (token) => token === "test-token" });
+  });
+
+  it("broadcasts correlated model-selection outcomes without replacing Runtime Status", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      runtimeStatus,
+      modelCatalog,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await withServer(
+      async (baseUrl) => {
+        const webSocket = new WebSocket(`${baseUrl.replace("http://", "ws://")}/v1/sessions/sess_1/stream`, {
+          headers: { authorization: "Bearer test-token" },
+        });
+        const messages: unknown[] = [];
+        webSocket.on("message", (data) => messages.push(JSON.parse(String(data))));
+        await new Promise<void>((resolve) => webSocket.once("open", resolve));
+        try {
+          const unsafeEvent = {
+            type: "remote_model_select_result",
+            requestId: "req_select",
+            ok: true,
+            model: { ...modelCatalog.models[1], apiKey: "must-not-leak", baseUrl: "https://secret.example" },
+            catalogVersion: "modelsv_known",
+          };
+          const eventResponse = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify(unsafeEvent),
+          });
+          expect(eventResponse.status).toBe(200);
+          await vi.waitFor(() => expect(messages).toContainEqual({
+            type: "remote_model_select_result",
+            requestId: "req_select",
+            ok: true,
+            model: modelCatalog.models[1],
+            catalogVersion: "modelsv_known",
+          }));
+          expect(JSON.stringify(messages)).not.toContain("must-not-leak");
+          expect(activeSessions.getSessionState("sess_1")?.runtimeStatus).toEqual(runtimeStatus);
+        } finally {
+          webSocket.close();
+        }
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token" },
+    );
+  });
+
+  it("deduplicates Agent Settlement before invoking completion notification fanout", async () => {
+    const activeSessions = createActiveSessionRegistry();
+    activeSessions.registerSession({
+      id: "sess_1",
+      piSessionId: "pi_1",
+      project: { id: "proj_1", name: "Example", path: "/repo/example" },
+      sessionFile: "/tmp/session.jsonl",
+      pid: 1234,
+      messageCount: 0,
+      isStreaming: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+    });
+    const notifyAgentSettlement = vi.fn(async () => undefined);
+
+    await withServer(
+      async (baseUrl) => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await fetch(`${baseUrl}/v1/tui/sessions/sess_1/events`, {
+            method: "POST",
+            headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+            body: JSON.stringify({ type: "agent_settled", settlementId: "settle_1" }),
+          });
+          expect(response.status).toBe(200);
+        }
+        await vi.waitFor(() => expect(notifyAgentSettlement).toHaveBeenCalledOnce());
+        expect(notifyAgentSettlement).toHaveBeenCalledWith({ settlementId: "settle_1", sessionId: "sess_1", projectId: "proj_1" });
+      },
+      { activeSessions, authenticateToken: (token) => token === "test-token", notifyAgentSettlement },
     );
   });
 

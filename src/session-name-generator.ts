@@ -1,5 +1,5 @@
-import { completeSimple } from "@earendil-works/pi-ai";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ActiveSessionNameGenerator } from "./active-session-registry.js";
 import type { TranscriptMessage } from "./types.js";
 
@@ -21,10 +21,10 @@ export type LlmSessionNameGeneratorDependencies = {
 };
 
 export function createLlmSessionNameGenerator(deps: LlmSessionNameGeneratorDependencies = {}): ActiveSessionNameGenerator {
-  const modelRegistry = deps.modelRegistry ?? defaultModelRegistry();
   const complete = deps.complete ?? defaultComplete;
 
   return async (request) => {
+    const modelRegistry = deps.modelRegistry ?? await defaultModelRegistry();
     const prompt = buildSessionNamePrompt(request.messages);
     if (!prompt) return null;
 
@@ -75,8 +75,11 @@ export function sanitizeGeneratedSessionName(name: string | null | undefined): s
   return cleaned.length > MAX_NAME_CHARS ? `${cleaned.slice(0, MAX_NAME_CHARS - 3)}...` : cleaned;
 }
 
-function defaultModelRegistry(): SessionNameModelRegistry {
-  return ModelRegistry.create(AuthStorage.create()) as unknown as SessionNameModelRegistry;
+let defaultModelRegistryPromise: Promise<SessionNameModelRegistry> | undefined;
+
+function defaultModelRegistry(): Promise<SessionNameModelRegistry> {
+  defaultModelRegistryPromise ??= ModelRuntime.create().then((runtime) => new ModelRegistry(runtime) as unknown as SessionNameModelRegistry);
+  return defaultModelRegistryPromise;
 }
 
 async function defaultComplete(model: SessionNameModel, context: { messages: Array<{ role: "user"; content: string; timestamp: number }> }, options?: { apiKey?: string; headers?: Record<string, string>; maxTokens?: number; temperature?: number; reasoning?: "off" }): Promise<{ content: Array<{ type: string; text?: string }> }> {

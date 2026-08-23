@@ -32,6 +32,8 @@ Tailscale example:
 }
 ```
 
+To enable completion notifications, set `pushGatewayBaseUrl` to the trusted central gateway URL in the same config file.
+
 Then open a Pi TUI session and run:
 
 ```text
@@ -39,8 +41,26 @@ Then open a Pi TUI session and run:
 /remote-control       # toggle this TUI session for remote control
 ```
 
+## Central Push Gateway
+
+The gateway is a separately deployed operator service; APNs credentials must never be installed on user daemons. Run `pi-relay-push-gateway` with:
+
+```text
+PI_APNS_TEAM_ID
+PI_APNS_KEY_ID
+PI_APNS_BUNDLE_ID
+PI_APNS_PRIVATE_KEY_PATH
+PI_PUSH_GATEWAY_STATE_DIR
+PI_PUSH_GATEWAY_BIND              # optional; defaults to 127.0.0.1:17473
+PI_PUSH_GATEWAY_MAX_PER_HOUR      # optional; defaults to 20 notifications per route
+PI_PUSH_GATEWAY_MAX_ROUTE_CREATIONS_PER_HOUR # optional; defaults to 20 per source IP
+```
+
+Terminate with `SIGINT` or `SIGTERM`. The state directory contains `push-gateway.sqlite` and must be backed up and restricted to the provider account.
+
 ## Directory overview
 
+- `src/push-gateway/` — independently deployed route service and APNs provider.
 - `scripts/http-smoke-test.sh` — curl/WebSocket smoke test for daemon HTTP endpoints.
 - `docs/architecture.md` — daemon architecture, Pi package shape, and lifecycle boundaries.
 - `docs/interfaces.md` — daemon public API and TUI control integration contract.

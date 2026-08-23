@@ -3,8 +3,9 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RemoteTuiCommand } from "../active-session-registry.js";
-import type { RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
+import type { RemoteCloneResultEvent, RemoteCompactResultEvent, RemoteForkResultEvent, RemoteModelSelectResultEvent, RemoteSessionReplacedEvent, RemoteTreeNavigationResultEvent } from "../types.js";
 import { loadDaemonConfig } from "../config.js";
+import { collectModelCatalog } from "../model-catalog.js";
 import { getDaemonStateDir } from "../paths.js";
 import { collectRuntimeStatus } from "../runtime-status.js";
 import { projectIdForPath } from "../session-index.js";
@@ -20,6 +21,8 @@ const transcriptEventCanonicalizers = new Map<string, ReturnType<typeof createTr
 const transcriptRetryTimers = new Map<string, NodeJS.Timeout>();
 const remoteReplacementInFlightSessionIds = new Set<string>();
 const localForkRemoteControlDisabledTargetFiles = new Set<string>();
+const agentRunStates = new Map<string, { runSequence: number; terminalCompleted: boolean }>();
+const pendingAgentSettlements = new Map<string, string>();
 
 export function __resetRemoteControlExtensionStateForTests(): void {
   for (const timer of pollTimers.values()) clearInterval(timer);
@@ -31,6 +34,8 @@ export function __resetRemoteControlExtensionStateForTests(): void {
   transcriptRetryTimers.clear();
   remoteReplacementInFlightSessionIds.clear();
   localForkRemoteControlDisabledTargetFiles.clear();
+  agentRunStates.clear();
+  pendingAgentSettlements.clear();
 }
 
 export default function remoteControlExtension(pi: ExtensionAPI): void {
@@ -50,6 +55,8 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
   const resetLocalState = (ctx: ExtensionContext) => {
     const sessionId = daemonSessionId(ctx);
     runtimeStatusCache.delete(sessionId);
+    agentRunStates.delete(sessionId);
+    pendingAgentSettlements.delete(sessionId);
     transcriptEventCanonicalizers.get(sessionId)?.reset();
     transcriptEventCanonicalizers.delete(sessionId);
     clearTimeout(transcriptRetryTimers.get(sessionId));
@@ -99,7 +106,7 @@ export default function remoteControlExtension(pi: ExtensionAPI): void {
         response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
           method: "POST",
           headers: await tuiHeaders(),
-          body: JSON.stringify(toRegistration(pi, ctx)),
+          body: JSON.stringify(await toRegistration(pi, ctx)),
         });
       } catch (error) {
         ctx.ui.notify(`Remote control enable failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -154,8 +161,40 @@ function registerEventForwarders(
   pi.on("tool_execution_start", forward);
   pi.on("tool_execution_update", forward);
   pi.on("tool_execution_end", forward);
-  pi.on("agent_start", forward);
-  pi.on("agent_end", forward);
+  pi.on("model_select", (event, ctx) => {
+    forward(event, ctx);
+    const sessionId = daemonSessionId(ctx);
+    if (!activeSessionIds.has(sessionId)) return;
+    void collectModelCatalog(ctx)
+      .then((catalog) => postTuiEvent(sessionId, { type: "remote_model_catalog", catalog }))
+      .catch(() => undefined);
+  });
+  pi.on("agent_start", (event, ctx) => {
+    const sessionId = daemonSessionId(ctx);
+    if (activeSessionIds.has(sessionId)) {
+      const previous = agentRunStates.get(sessionId);
+      agentRunStates.set(sessionId, { runSequence: (previous?.runSequence ?? 0) + 1, terminalCompleted: false });
+    }
+    forward(event, ctx);
+  });
+  pi.on("agent_end", (event, ctx) => {
+    const sessionId = daemonSessionId(ctx);
+    const state = agentRunStates.get(sessionId);
+    if (state) {
+      const messages = Array.isArray(asRecord(event).messages) ? asRecord(event).messages as unknown[] : [];
+      const assistant = [...messages].reverse().map(asRecord).find((message) => message.role === "assistant");
+      state.terminalCompleted = Boolean(assistant) && assistant?.stopReason !== "aborted" && assistant?.stopReason !== "error";
+    }
+    forward(event, ctx);
+  });
+  pi.on("agent_settled", (_event, ctx) => {
+    const sessionId = daemonSessionId(ctx);
+    const state = agentRunStates.get(sessionId);
+    if (!activeSessionIds.has(sessionId) || !state?.terminalCompleted) return;
+    const settlementId = `settle_${Buffer.from(`${sessionId}:${state.runSequence}`, "utf8").toString("base64url")}`;
+    pendingAgentSettlements.set(sessionId, settlementId);
+    void postPendingAgentSettlement(sessionId);
+  });
 }
 
 function rememberLocalForkRemoteControlDisabled(event: unknown, ctx: ExtensionContext, sessionId: string, isRemoteReplacement: boolean): void {
@@ -326,7 +365,7 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function toRegistration(pi: unknown, ctx: ExtensionCommandContext): unknown {
+async function toRegistration(pi: unknown, ctx: ExtensionCommandContext): Promise<unknown> {
   const cwd = ctx.cwd;
   const piSessionId = ctx.sessionManager.getSessionId();
   const sessionFile = ctx.sessionManager.getSessionFile() ?? "";
@@ -341,6 +380,7 @@ function toRegistration(pi: unknown, ctx: ExtensionCommandContext): unknown {
     entries: ctx.sessionManager.getEntries(),
     isStreaming: !ctx.isIdle(),
     runtimeStatus: collectRuntimeStatus(pi, ctx),
+    modelCatalog: await collectModelCatalog(ctx),
     treeSnapshot: treeSnapshotForContext(ctx),
     updatedAt: new Date().toISOString(),
   };
@@ -380,8 +420,9 @@ async function pollRemoteCommands(
     return;
   }
   if (!response.ok) return;
+  void postPendingAgentSettlement(sessionId);
   const body = (await response.json()) as { commands?: RemoteTuiCommand[] };
-  for (const command of body.commands ?? []) handleRemoteCommand(pi as Pick<ExtensionAPI, "sendUserMessage">, ctx, command, sessionId);
+  for (const command of body.commands ?? []) handleRemoteCommand(pi as Pick<ExtensionAPI, "sendUserMessage" | "setModel">, ctx, command, sessionId);
 }
 
 async function reRegisterTuiSessionAfterHeartbeatMiss(
@@ -399,7 +440,7 @@ async function reRegisterTuiSessionAfterHeartbeatMiss(
     response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
       method: "POST",
       headers: await tuiHeaders(),
-      body: JSON.stringify(toRegistration(pi, ctx)),
+      body: JSON.stringify(await toRegistration(pi, ctx)),
     });
   } catch {
     disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
@@ -408,6 +449,7 @@ async function reRegisterTuiSessionAfterHeartbeatMiss(
 
   if (response.ok) {
     runtimeStatusCache.set(sessionId, comparableRuntimeStatus(collectRuntimeStatus(pi, ctx)));
+    void postPendingAgentSettlement(sessionId);
     return;
   }
   disconnectLocalSession(ctx, sessionId, activeSessionIds, pollTimers);
@@ -425,8 +467,8 @@ function disconnectLocalSession(
 }
 
 export function handleRemoteCommand(
-  pi: Pick<ExtensionAPI, "sendUserMessage">,
-  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "fork" | "isIdle" | "navigateTree" | "sessionManager">,
+  pi: Pick<ExtensionAPI, "sendUserMessage" | "setModel">,
+  ctx: Pick<ExtensionCommandContext, "abort" | "compact" | "fork" | "isIdle" | "model" | "modelRegistry" | "navigateTree" | "scopedModels" | "sessionManager">,
   command: RemoteTuiCommand,
   sessionId?: string,
 ): void {
@@ -436,10 +478,72 @@ export function handleRemoteCommand(
   }
   if (command.type === "remote_abort") ctx.abort();
   if (command.type === "remote_compact") handleRemoteCompactCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_model_catalog_refresh") handleRemoteModelCatalogRefreshCommand(ctx, command.requestId, sessionId);
+  if (command.type === "remote_model_select") handleRemoteModelSelectCommand(pi, ctx, command, sessionId);
   if (command.type === "remote_tree_refresh") handleRemoteTreeRefreshCommand(ctx, command.requestId, sessionId);
   if (command.type === "remote_tree_navigate") handleRemoteTreeNavigateCommand(ctx, command, sessionId);
   if (command.type === "remote_fork") handleRemoteForkCommand(pi, ctx, command, sessionId);
   if (command.type === "remote_clone") handleRemoteCloneCommand(pi, ctx, command, sessionId);
+}
+
+function handleRemoteModelCatalogRefreshCommand(
+  ctx: Pick<ExtensionCommandContext, "model" | "modelRegistry" | "scopedModels">,
+  requestId: string,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+  void collectModelCatalog(ctx)
+    .then((catalog) => postTuiEvent(sessionId, { type: "remote_model_catalog", requestId, catalog }))
+    .catch(() => postTuiEvent(sessionId, { type: "error", error: "model_catalog_refresh_failed" }).catch(() => undefined));
+}
+
+function handleRemoteModelSelectCommand(
+  pi: Pick<ExtensionAPI, "setModel">,
+  ctx: Pick<ExtensionCommandContext, "isIdle" | "model" | "modelRegistry" | "scopedModels" | "sessionManager">,
+  command: Extract<RemoteTuiCommand, { type: "remote_model_select" }>,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+  void (async () => {
+    if (!ctx.isIdle()) {
+      await postTuiEvent(sessionId, { type: "remote_model_select_result", requestId: command.requestId, ok: false, error: "session_busy" } satisfies RemoteModelSelectResultEvent);
+      return;
+    }
+    try {
+      const catalog = await collectModelCatalog(ctx);
+      if (catalog.catalogVersion !== command.baseCatalogVersion) {
+        await postTuiEvent(sessionId, { type: "remote_model_select_result", requestId: command.requestId, ok: false, error: "model_catalog_changed" } satisfies RemoteModelSelectResultEvent);
+        await postTuiEvent(sessionId, { type: "remote_model_catalog", requestId: command.requestId, catalog });
+        return;
+      }
+      const summary = catalog.models.find((model) => model.provider === command.provider && model.modelId === command.modelId);
+      if (!summary) {
+        await postTuiEvent(sessionId, { type: "remote_model_select_result", requestId: command.requestId, ok: false, error: "model_not_found" } satisfies RemoteModelSelectResultEvent);
+        return;
+      }
+      const model = ctx.modelRegistry.find(command.provider, command.modelId);
+      if (!model || !await pi.setModel(model)) {
+        await postTuiEvent(sessionId, { type: "remote_model_select_result", requestId: command.requestId, ok: false, error: "model_unavailable" } satisfies RemoteModelSelectResultEvent);
+        return;
+      }
+      const selectedContext = { model, modelRegistry: ctx.modelRegistry, scopedModels: ctx.scopedModels };
+      const selectedCatalog = await collectModelCatalog(selectedContext);
+      const selectedSummary = selectedCatalog.currentModel ?? summary;
+      await postTuiEvent(sessionId, {
+        type: "remote_model_select_result",
+        requestId: command.requestId,
+        ok: true,
+        model: selectedSummary,
+        catalogVersion: selectedCatalog.catalogVersion,
+      } satisfies RemoteModelSelectResultEvent);
+      await postTuiEvent(sessionId, { type: "remote_model_catalog", requestId: command.requestId, catalog: selectedCatalog });
+      const status = collectRuntimeStatus(pi, { ...ctx, model });
+      runtimeStatusCache.set(sessionId, comparableRuntimeStatus(status));
+      await postTuiEvent(sessionId, { type: "runtime_status", status });
+    } catch {
+      await postTuiEvent(sessionId, { type: "remote_model_select_result", requestId: command.requestId, ok: false, error: "selection_failed" } satisfies RemoteModelSelectResultEvent).catch(() => undefined);
+    }
+  })().catch(() => undefined);
 }
 
 function remotePromptDeliveryOptions(ctx: Pick<ExtensionCommandContext, "isIdle">, streamingBehavior: "steer" | "followUp" | null | undefined): { deliverAs: "steer" | "followUp" } | undefined {
@@ -469,7 +573,7 @@ function handleRemoteCloneCommand(pi: unknown, ctx: Pick<ExtensionCommandContext
         position: "at",
         withSession: async (replacementCtx) => {
           replacementSessionStarted = true;
-          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const registration = await toRegistration(pi, replacementCtx as ExtensionCommandContext);
           const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
             method: "POST",
             headers: await tuiHeaders(),
@@ -538,7 +642,7 @@ function handleRemoteForkCommand(pi: unknown, ctx: Pick<ExtensionCommandContext,
         withSession: async (replacementCtx) => {
           replacementSessionStarted = true;
           replacementCtx.ui.setEditorText("");
-          const registration = toRegistration(pi, replacementCtx as ExtensionCommandContext);
+          const registration = await toRegistration(pi, replacementCtx as ExtensionCommandContext);
           const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions`, {
             method: "POST",
             headers: await tuiHeaders(),
@@ -671,6 +775,23 @@ function toRemoteCompactErrorEvent(requestId: string, error: unknown): RemoteCom
     ok: false,
     message: error instanceof Error ? error.message : String(error),
   };
+}
+
+async function postPendingAgentSettlement(sessionId: string): Promise<void> {
+  const settlementId = pendingAgentSettlements.get(sessionId);
+  if (!settlementId) return;
+  try {
+    const response = await fetch(`${await daemonBaseUrl()}/v1/tui/sessions/${encodeURIComponent(sessionId)}/events`, {
+      method: "POST",
+      headers: await tuiHeaders(),
+      body: JSON.stringify({ type: "agent_settled", settlementId }),
+    });
+    if (response.ok && pendingAgentSettlements.get(sessionId) === settlementId) {
+      pendingAgentSettlements.delete(sessionId);
+    }
+  } catch {
+    // Keep pending until a later heartbeat confirms the daemon is reachable again.
+  }
 }
 
 async function postTuiEvent(sessionId: string, event: unknown): Promise<void> {

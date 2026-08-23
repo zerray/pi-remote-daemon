@@ -21,6 +21,8 @@ type ExtensionTestContext = {
     getTree?(): unknown[];
   };
   model?: unknown;
+  modelRegistry?: { refresh(): Promise<unknown>; getAvailable(): unknown[]; find?(provider: string, modelId: string): unknown };
+  scopedModels?: Array<{ model: unknown }>;
   getContextUsage?(): unknown;
   isIdle(): boolean;
   ui: {
@@ -69,6 +71,17 @@ function createContext() {
         getEntries: () => [{}, {}],
       },
       model: { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
+      modelRegistry: {
+        refresh: async () => ({ aborted: false, errors: new Map() }),
+        getAvailable: () => [
+          { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", contextWindow: 200000, maxTokens: 8192, reasoning: true },
+          { provider: "openai", id: "gpt-5", name: "GPT-5", contextWindow: 400000, maxTokens: 128000, reasoning: true },
+        ],
+        find(provider: string, modelId: string) {
+          return this.getAvailable().find((model) => model.provider === provider && model.id === modelId);
+        },
+      },
+      scopedModels: [{ model: { provider: "anthropic", id: "claude-sonnet-4-5" } }],
       getContextUsage: () => ({ tokens: 65000, contextWindow: 200000, percent: 32.5 }),
       isIdle: () => true,
       ui: {
@@ -185,6 +198,33 @@ describe("remote control extension", () => {
       },
     ]);
     expect(notifications.at(-1)).toEqual({ message: "Remote control enabled for this session", type: "info" });
+  });
+
+  it("registers an initial reduced Model Catalog Snapshot", async () => {
+    const { pi, commands } = createFakePi();
+    const { ctx } = createContext();
+    let registrationBody: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/tui/sessions")) registrationBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" } }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    expect(registrationBody?.modelCatalog).toEqual({
+      currentModel: expect.objectContaining({ provider: "anthropic", modelId: "claude-sonnet-4-5", isScoped: true }),
+      models: [
+        expect.objectContaining({ provider: "anthropic", modelId: "claude-sonnet-4-5", isScoped: true }),
+        expect.objectContaining({ provider: "openai", modelId: "gpt-5", isScoped: false }),
+      ],
+      catalogVersion: expect.stringMatching(/^modelsv_/),
+      generatedAt: expect.any(String),
+    });
+    expect(JSON.stringify(registrationBody?.modelCatalog)).not.toContain("baseUrl");
   });
 
   it("registers an initial reduced Tree Snapshot when tree state is available", async () => {
@@ -749,6 +789,95 @@ describe("remote control extension", () => {
     });
   });
 
+  it("reports a fresh catalog after a local TUI model selection", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const postedBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/events") && init?.body) postedBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" }, accepted: true }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+    ctx.model = ctx.modelRegistry!.getAvailable()[1];
+
+    await handlers.get("model_select")?.({ type: "model_select" }, ctx);
+
+    await vi.waitFor(() => expect(postedBodies).toContainEqual(expect.objectContaining({
+      type: "remote_model_catalog",
+      catalog: expect.objectContaining({ currentModel: expect.objectContaining({ provider: "openai", modelId: "gpt-5" }) }),
+    })));
+  });
+
+  it("reports Agent Settlement only for a non-aborted, non-error settled run", async () => {
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    const postedBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/events") && init?.body) postedBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" }, accepted: true }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+
+    await handlers.get("agent_start")?.({ type: "agent_start" }, ctx);
+    await handlers.get("agent_end")?.({ type: "agent_end", messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
+    await vi.waitFor(() => expect(postedBodies).toContainEqual({
+      type: "agent_settled",
+      settlementId: expect.stringMatching(/^settle_/),
+    }));
+    const completedSettlementCount = postedBodies.filter((body) => body.type === "agent_settled").length;
+
+    await handlers.get("agent_start")?.({ type: "agent_start" }, ctx);
+    await handlers.get("agent_end")?.({ type: "agent_end", messages: [{ role: "assistant", stopReason: "error" }] }, ctx);
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(postedBodies.filter((body) => body.type === "agent_settled")).toHaveLength(completedSettlementCount);
+
+    await handlers.get("agent_start")?.({ type: "agent_start" }, ctx);
+    await handlers.get("agent_end")?.({ type: "agent_end", messages: [] }, ctx);
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(postedBodies.filter((body) => body.type === "agent_settled")).toHaveLength(completedSettlementCount);
+  });
+
+  it("retries a pending Agent Settlement after the heartbeat reconnects", async () => {
+    vi.useFakeTimers();
+    const { pi, commands, handlers } = createFakePi();
+    const { ctx } = createContext();
+    let settlementAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+        if (body?.type === "agent_settled") {
+          settlementAttempts += 1;
+          if (settlementAttempts === 1) throw new TypeError("daemon restarting");
+        }
+        if (url.endsWith("/commands")) return new Response(JSON.stringify({ commands: [] }), { status: 200 });
+        return new Response(JSON.stringify({ session: { id: "sess_pi_1" }, accepted: true }), { status: 200 });
+      }),
+    );
+    remoteControlExtension(pi as never);
+    await commands.find((command) => command.name === "remote-control")!.handler("", ctx);
+    await handlers.get("agent_start")?.({ type: "agent_start" }, ctx);
+    await handlers.get("agent_end")?.({ type: "agent_end", messages: [{ role: "assistant", stopReason: "stop" }] }, ctx);
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
+    await vi.waitFor(() => expect(settlementAttempts).toBe(1));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await vi.waitFor(() => expect(settlementAttempts).toBe(2));
+  });
+
   it("forwards TUI events while remote control is active", async () => {
     const { pi, commands, handlers } = createFakePi();
     const { ctx } = createContext();
@@ -803,6 +932,52 @@ describe("remote control extension", () => {
     });
 
     expect(sendUserMessage).toHaveBeenCalledWith("hello while busy", { deliverAs: "followUp" });
+  });
+
+  it("refreshes the live model catalog and selects an exact authenticated model", async () => {
+    const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        fetchCalls.push({ url, body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {} });
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }),
+    );
+    const { ctx } = createContext();
+    const selectedModel = ctx.modelRegistry!.getAvailable()[1];
+    const setModel = vi.fn(async (model: unknown) => {
+      ctx.model = model;
+      return true;
+    });
+    const pi = { sendUserMessage: vi.fn(), setModel, getThinkingLevel: () => "medium" };
+
+    handleRemoteCommand(pi as never, ctx as never, { type: "remote_model_catalog_refresh", requestId: "req_refresh" }, "sess_pi_1");
+    await vi.waitFor(() => expect(fetchCalls).toContainEqual(expect.objectContaining({
+      body: expect.objectContaining({ type: "remote_model_catalog", requestId: "req_refresh" }),
+    })));
+    const refreshEvent = fetchCalls.find((call) => call.body.type === "remote_model_catalog")!.body;
+    const catalogVersion = (refreshEvent.catalog as { catalogVersion: string }).catalogVersion;
+
+    handleRemoteCommand(pi as never, ctx as never, {
+      type: "remote_model_select",
+      requestId: "req_select",
+      provider: "openai",
+      modelId: "gpt-5",
+      baseCatalogVersion: catalogVersion,
+    }, "sess_pi_1");
+
+    await vi.waitFor(() => expect(fetchCalls.map((call) => call.body)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "remote_model_select_result",
+        requestId: "req_select",
+        ok: true,
+        model: expect.objectContaining({ provider: "openai", modelId: "gpt-5" }),
+        catalogVersion: expect.stringMatching(/^modelsv_/),
+      }),
+      expect.objectContaining({ type: "remote_model_catalog", catalog: expect.objectContaining({ currentModel: expect.objectContaining({ provider: "openai", modelId: "gpt-5" }) }) }),
+      expect.objectContaining({ type: "runtime_status", status: expect.objectContaining({ model: expect.objectContaining({ provider: "openai", id: "gpt-5" }) }) }),
+    ])));
+    expect(setModel).toHaveBeenCalledWith(selectedModel);
   });
 
   it("clones the active branch into a replacement session without returning draft text", async () => {
