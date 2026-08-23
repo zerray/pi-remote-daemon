@@ -44,6 +44,37 @@ Response:
 }
 ```
 
+### Push Route registration
+
+`PUT /v1/devices/self/push-route` registers or replaces the central Push Gateway route for the paired device identified by the request bearer token. The daemon resolves device identity from authentication; callers do not supply a daemon device ID and cannot modify another paired device.
+
+Request:
+
+```json
+{
+  "routeId": "pushroute_...",
+  "routeToken": "opaque-gateway-bearer-capability",
+  "enabled": true
+}
+```
+
+`routeToken` is a bearer secret and is stored only in owner-readable daemon state. The configured Push Gateway base URL is trusted daemon configuration and cannot be overridden by this request.
+
+Response:
+
+```json
+{ "registered": true }
+```
+
+`DELETE /v1/devices/self/push-route` disables completion push for the authenticated paired device and removes the daemon's route capability. The iOS app separately revokes the route through its gateway management credential.
+
+The central Push Gateway contract has two narrow operations:
+
+- iOS registers or rotates an APNs device token and receives a non-secret `routeId`, a daemon-facing `routeToken`, and an app-facing route management credential.
+- A daemon presents `routeToken` with an idempotent Agent Settlement containing only `routeId`, `projectId`, and `sessionId`; the gateway renders the fixed generic alert and sends it through APNs.
+
+The gateway owns APNs environment selection, APNs provider authentication, invalid-token cleanup, route revocation, idempotency, and rate limits. The daemon never receives the APNs device token or provider credential.
+
 ### Projects
 
 `GET /v1/projects`
@@ -340,6 +371,55 @@ If the session has no active TUI owner, the daemon returns `409`:
 }
 ```
 
+### Remote model selection
+
+`GET /v1/sessions/{sessionId}/models` returns the latest Model Catalog Snapshot reported by the owning TUI extension:
+
+```json
+{
+  "catalog": {
+    "currentModel": {
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-5",
+      "name": "Claude Sonnet 4.5",
+      "reasoning": true,
+      "contextWindow": 200000,
+      "maxTokens": 8192,
+      "isScoped": true
+    },
+    "models": [],
+    "catalogVersion": "modelsv_...",
+    "generatedAt": "2026-05-09T09:47:00.000Z"
+  }
+}
+```
+
+The catalog contains only authenticated available models. Public entries omit API keys, provider headers, base URLs, provider environment, auth source, and cost-routing configuration. `isScoped` lets iOS initially mirror Pi's scoped model view; an empty Pi scope marks every available model as selectable from the all-model view.
+
+`POST /v1/sessions/{sessionId}/models/refresh` queues a refresh in the owning TUI and returns:
+
+```json
+{ "accepted": true, "requestId": "req_..." }
+```
+
+The refreshed catalog arrives later as `remote_model_catalog` on the session WebSocket.
+
+`POST /v1/sessions/{sessionId}/model` queues Remote Model Selection.
+
+Request:
+
+```json
+{
+  "provider": "anthropic",
+  "modelId": "claude-sonnet-4-5",
+  "baseCatalogVersion": "modelsv_..."
+}
+```
+
+The daemon rejects selection with `409 session_busy` while the agent is active, `409 model_catalog_changed` when iOS used a stale catalog, and `409 model_not_found` when the cached catalog does not contain the exact provider/model identity. An accepted request returns a request ID; completion arrives asynchronously as `remote_model_select_result`. The TUI refreshes its live registry and can still report `model_unavailable` if authentication or availability changed after daemon validation.
+
+Remote model selection never accepts free-form model patterns, CLI flags, thinking levels, or slash-command text. Pi performs its normal thinking-level clamping after `pi.setModel(...)`.
+
 `GET /v1/sessions/{sessionId}/tree`
 
 Returns the latest daemon-cached Tree Snapshot for an active remote-control session. This read has no side effects and does not ask the TUI extension to refresh. If the daemon has a cached snapshot that it no longer trusts, it still returns that snapshot with `stale: true` so iOS can display it while requesting refresh. If no snapshot is available yet, the daemon returns `409 tree_state_unavailable`; clients may request refresh with `POST /tree/refresh`.
@@ -463,7 +543,7 @@ The final outcome arrives as `remote_clone_result`. On success, the old session 
 
 `GET /v1/sessions/{sessionId}/stream` upgrades to WebSocket.
 
-Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, additional bounded `session_state` refreshes when session-level activity or active branch changes, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, tree snapshots, remote-action results, `remote_session_replaced`, `session_closed`, and errors. Live `TranscriptMessage.id` values use the same canonical Pi session-entry IDs as HTTP snapshots whenever the message has a persisted session entry. The stream must not send transcript message events with temporary TUI message IDs. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be delayed or omitted from the stream until they can be reconciled with the session entry; they are recovered by later snapshot/page reads.
+Server messages are daemon-normalized transcript stream events. The stream sends a bounded initial `session_state`, additional bounded `session_state` refreshes when session-level activity or active branch changes, turn lifecycle events, live `TranscriptMessage` lifecycle events, normalized tool execution events, `runtime_status`, Model Catalog Snapshots, model-selection results, tree snapshots, remote-action results, `remote_session_replaced`, `session_closed`, and errors. Live `TranscriptMessage.id` values use the same canonical Pi session-entry IDs as HTTP snapshots whenever the message has a persisted session entry. The stream must not send transcript message events with temporary TUI message IDs. It must not send raw Pi TUI extension events or full historical transcript payloads. Full or older persisted history is loaded only through the HTTP session snapshot and transcript-page endpoints. In-progress events that are not yet persisted may be delayed or omitted from the stream until they can be reconciled with the session entry; they are recovered by later snapshot/page reads.
 
 Each WebSocket `session_state` contains a primary window of at most 20 recent messages regardless of the HTTP transcript default. If that primary window contains `toolResult` messages, older assistant messages that declare the matching `toolCall` IDs may be prepended as dependency context, so the final message array can exceed 20. Before the initial `session_state` is sent, oversized string payloads inside those messages are truncated to their first 10 KiB of UTF-8 data and marked with truncation metadata. This preview truncation applies to initial WebSocket state only; HTTP transcript endpoints keep their requested transcript windows, and live incremental events are not changed by this rule.
 
@@ -533,6 +613,16 @@ Runtime status events:
 
 The daemon sends `runtime_status` when the owning TUI extension reports a changed runtime-status snapshot. Clients should treat the event as replacing the previous runtime status for that session.
 
+Model events:
+
+```json
+{ "type": "remote_model_catalog", "requestId": "req_models_1", "catalog": { "currentModel": { "provider": "anthropic", "modelId": "claude-sonnet-4-5", "isScoped": true }, "models": [], "catalogVersion": "modelsv_2", "generatedAt": "2026-05-09T09:47:00.000Z" } }
+{ "type": "remote_model_select_result", "requestId": "req_model_1", "ok": true, "model": { "provider": "anthropic", "modelId": "claude-sonnet-4-5", "isScoped": true }, "catalogVersion": "modelsv_2" }
+{ "type": "remote_model_select_result", "requestId": "req_model_2", "ok": false, "error": "model_unavailable" }
+```
+
+Catalog events replace the cached picker state. Selection errors are `session_busy`, `model_catalog_changed`, `model_not_found`, `model_unavailable`, and `selection_failed`. A successful selection also causes a Runtime Status update; clients use Runtime Status as the authority for the active model.
+
 Remote compact result events:
 
 ```json
@@ -601,6 +691,12 @@ When `/remote-control` enables a session, the extension registers the current TU
       "context": { "tokens": 65000, "contextWindow": 200000, "percent": 32.5 },
       "updatedAt": "2026-05-09T09:47:00.000Z"
     },
+    "modelCatalog": {
+      "currentModel": { "provider": "anthropic", "modelId": "claude-sonnet-4-5", "reasoning": true, "contextWindow": 200000, "maxTokens": 8192, "isScoped": true },
+      "models": [],
+      "catalogVersion": "modelsv_1",
+      "generatedAt": "2026-05-09T09:47:00.000Z"
+    },
     "treeSnapshot": {
       "sessionId": "sess_...",
       "leafId": "entry_leaf_or_null",
@@ -621,9 +717,13 @@ When `/remote-control` enables a session, the extension registers the current TU
 
 While active, the extension forwards Pi extension events and runtime-status snapshots to the daemon over the package-internal control interface. Raw Pi event payloads are internal inputs only. Before posting message lifecycle events, the extension canonicalizes `message_start`, `message_update`, and `message_end` IDs to the Pi session JSONL message entry ID. If a lifecycle event cannot yet be matched to a unique session entry, the extension buffers it briefly instead of posting a temporary TUI ID. Buffered events are correlated by a TUI temporary message ID when present, otherwise by exact `message.role + message.timestamp`; content hashing and fuzzy text matching are not part of the contract. The daemon normalizes accepted internal events before sending any WebSocket messages to iOS.
 
-Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, queue, status, tree, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. TUI session-name updates are posted as `{ "type": "session_name", "name": "Refactor auth module" }`; a nonblank name replaces any daemon-generated active-session name.
+Accepted internal event kinds include turn lifecycle, message lifecycle, assistant message updates, tool execution lifecycle, agent lifecycle, Agent Settlement, queue, status, Model Catalog Snapshot, model-selection result, tree, and session lifecycle events emitted or computed by the Pi extension. Runtime-status snapshots are posted as `{ "type": "runtime_status", "status": RuntimeStatus }`; the daemon stores the snapshot and broadcasts the public `runtime_status` WebSocket event when it changes. TUI session-name updates are posted as `{ "type": "session_name", "name": "Refactor auth module" }`; a nonblank name replaces any daemon-generated active-session name.
 
 Tree snapshots are posted as `{ "type": "tree_snapshot", "requestId": "req_...", "snapshot": TreeSnapshot }`. Lightweight branch-state updates may be posted as `{ "type": "tree_state", "leafId": "entry_...", "branchVersion": "branchv_..." }` when the active branch grows and a full snapshot is not needed. `tree_state` is package-internal and is not forwarded to iOS as a public WebSocket event. The daemon stores the latest tree and branch state in active-session process memory. If cached tree state becomes invalid against the session file, transcript reads fall back to linear JSONL order and the daemon marks tree state stale until the TUI reports a fresh snapshot.
+
+Model catalogs are posted as `{ "type": "remote_model_catalog", "requestId": "req_...", "catalog": ModelCatalogSnapshot }`; the daemon replaces its active-session cache and broadcasts the public event. Model-selection outcomes are posted as `{ "type": "remote_model_select_result", "requestId": "req_...", "ok": true, "model": RemoteModelSummary, "catalogVersion": "modelsv_..." }` or a failure with a stable `error`.
+
+Agent Settlement is posted as `{ "type": "agent_settled", "settlementId": "settle_..." }`. The ID is stable for duplicate delivery of the same settled run. The extension emits it only after at least one agent run and does not treat a terminal aborted or error outcome as completed work. The daemon uses it for push idempotency and does not expose it as transcript content.
 
 Remote compact results are posted as `{ "type": "remote_compact_result", "requestId": "req_...", "ok": true, "summary": "...", "firstKeptEntryId": "entry_...", "tokensBefore": 12345 }` or `{ "type": "remote_compact_result", "requestId": "req_...", "ok": false, "message": "..." }`; the daemon broadcasts the public `remote_compact_result` WebSocket event without storing it durably. Tree navigation, fork, clone, and session-replacement results are posted with the public result shapes described in the session stream section.
 
@@ -635,13 +735,15 @@ The daemon forwards iOS requests to the owning TUI extension:
 { "type": "remote_prompt", "requestId": "req_...", "text": "...", "streamingBehavior": null }
 { "type": "remote_abort", "requestId": "req_..." }
 { "type": "remote_compact", "requestId": "req_..." }
+{ "type": "remote_model_catalog_refresh", "requestId": "req_..." }
+{ "type": "remote_model_select", "requestId": "req_...", "provider": "anthropic", "modelId": "claude-sonnet-4-5", "baseCatalogVersion": "modelsv_..." }
 { "type": "remote_tree_refresh", "requestId": "req_..." }
 { "type": "remote_tree_navigate", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null", "summaryMode": "default" }
 { "type": "remote_fork", "requestId": "req_...", "targetEntryId": "entry_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
 { "type": "remote_clone", "requestId": "req_...", "baseSnapshotVersion": "treev_...", "baseBranchVersion": "branchv_...", "baseLeafId": "entry_current_or_null" }
 ```
 
-Prompt and abort command acknowledgements are not part of the current MVP protocol. Compact, tree navigation, fork, and clone completion are reported asynchronously through their corresponding WebSocket result events. Tree refresh completion is reported through `remote_tree_snapshot`.
+Prompt and abort command acknowledgements are not part of the current MVP protocol. Compact, model refresh, model selection, tree navigation, fork, and clone completion are reported asynchronously through their corresponding WebSocket result events. Tree refresh completion is reported through `remote_tree_snapshot`.
 
 ## Pi integration boundary
 
@@ -655,6 +757,9 @@ The daemon keeps Pi-specific transport details inside the package. Pi SDK/RPC is
 | Prompt | iOS → daemon → owning TUI extension → Pi extension API. |
 | Abort | iOS → daemon → owning TUI extension → Pi extension API. |
 | Compact | iOS → daemon → owning TUI extension → Pi extension API `ctx.compact()` → TUI-reported `remote_compact_result` → iOS WebSocket. |
+| Model catalog | Owning TUI model registry → reduced Model Catalog Snapshot → daemon process cache → iOS HTTP/WebSocket. |
+| Select model | iOS → daemon stale/busy guard → owning TUI extension → Pi extension API `pi.setModel(...)` → selection result and Runtime Status → iOS WebSocket. |
+| Completion push | Pi `agent_settled` → owning TUI extension Agent Settlement → daemon Push Route → central Push Gateway → APNs. |
 | Tree refresh | iOS → daemon → owning TUI extension → TUI-reported `TreeSnapshot` → daemon cache → iOS WebSocket. |
 | Tree navigation | iOS → daemon → owning TUI extension → Pi extension API `ctx.navigateTree()` → TUI-reported navigation result and tree snapshot → daemon branch-aware state/session refresh → iOS WebSocket. |
 | Fork | iOS → daemon → owning TUI extension → Pi extension API `ctx.fork()` → replacement session registration → replacement/result events → iOS WebSocket. |

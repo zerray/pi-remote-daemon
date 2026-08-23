@@ -39,7 +39,17 @@ create table pairing_codes (
   expires_at text not null,
   consumed_at text
 );
+
+create table device_push_routes (
+  device_id text primary key references devices(id),
+  route_id text not null unique,
+  route_token text not null,
+  enabled integer not null,
+  updated_at text not null
+);
 ```
+
+`device_push_routes.route_token` is a gateway bearer capability, not an APNs device token. It is durable because the daemon must notify while iOS is suspended, and it relies on the same owner-only directory and database permissions as daemon device credentials.
 
 Pairing codes and device token hashes are durable. Active session registry entries are rebuilt by currently running Pi TUI extensions after the user enables `/remote-control`. Completed transcript history is read from Pi session JSONL files, not stored in daemon SQLite or active registry memory.
 
@@ -49,10 +59,11 @@ Pairing codes and device token hashes are durable. Active session registry entri
 type DaemonConfig = {
   bindAddress: string;
   advertisedBaseUrl?: string;
+  pushGatewayBaseUrl?: string;
 };
 ```
 
-`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions. `bindAddress` is the remote-facing listener. When it is a specific non-loopback address, the daemon also listens on `127.0.0.1` on the same port for local TUI control. `advertisedBaseUrl` is the URL encoded into pairing QR codes and used by iOS for future daemon calls; it must not be a loopback or wildcard address when pairing a separate device.
+`config.json` is human-editable daemon configuration. It does not contain allowed project roots for the MVP because project visibility is derived from active remote-control TUI sessions. `pushGatewayBaseUrl` is the trusted central Push Gateway endpoint; iOS cannot override it when registering a Push Route. `bindAddress` is the remote-facing listener. When it is a specific non-loopback address, the daemon also listens on `127.0.0.1` on the same port for local TUI control. `advertisedBaseUrl` is the URL encoded into pairing QR codes and used by iOS for future daemon calls; it must not be a loopback or wildcard address when pairing a separate device.
 
 ## Daemon process state
 
@@ -110,6 +121,20 @@ type PairedDevice = {
 
 The iOS app stores the bearer token in Keychain. The daemon stores only token hashes.
 
+## Push Route
+
+```ts
+type DevicePushRoute = {
+  deviceId: string;
+  routeId: string;
+  routeToken: string;
+  enabled: boolean;
+  updatedAt: string;
+};
+```
+
+A Push Route is a gateway-issued capability associated with the paired device resolved from daemon bearer authentication. `routeId` is non-secret and is returned in APNs custom payloads so iOS can resolve the paired daemon. `routeToken` authorizes only the gateway's fixed generic Agent Settlement notification for this route. APNs device tokens and APNs provider keys are never daemon data.
+
 ## Active project
 
 ```ts
@@ -153,14 +178,16 @@ type ActiveTuiSession = {
   messageCount: number;
   isStreaming: boolean;
   runtimeStatus?: RuntimeStatus;
+  modelCatalog?: ModelCatalogSnapshot;
   treeSnapshot?: TreeSnapshot;
   treeStateStale?: boolean;
   registeredAt: string;
   lastSeenAt: string;
+  lastSettlementId?: string;
 };
 ```
 
-An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `runtimeStatus` is the latest structured runtime-status snapshot reported by the owning TUI extension. Its `treeSnapshot` is the latest TUI-reported public tree state used for remote tree UI and branch-aware transcript reads.
+An active TUI session is owned by one Pi extension control channel. It is removed when `/remote-control` disables it, the TUI session shuts down, or the control channel closes. If the daemon removes it because heartbeats stopped but the same TUI process still has local remote-control state active, the TUI extension can recreate the active session by re-registering on the next heartbeat miss. Its `sessionFile` points to the Pi JSONL transcript used for HTTP transcript reads. Its `runtimeStatus` is the latest structured runtime-status snapshot reported by the owning TUI extension. Its `modelCatalog` is the latest reduced authenticated model list used for explicit remote selection. Its `treeSnapshot` is the latest TUI-reported public tree state used for remote tree UI and branch-aware transcript reads. `lastSettlementId` prevents duplicate push requests for the same settled run and is not durable beyond the active-session lifetime.
 
 `name` is the effective public display name for API responses. `nameSource` is `"tui"` when Pi session metadata supplied a nonblank name and `"generated"` when the daemon generated an ephemeral name for an otherwise unnamed session. Generated names live only in active-session process state and are discarded with that state. A later nonblank TUI name replaces the generated name.
 
@@ -202,6 +229,49 @@ type RuntimeStatus = {
 ```
 
 `RuntimeStatus` is computed by the live TUI extension from Pi extension context. It is process state in the daemon, not durable storage. `context.tokens` and `context.percent` may be `null` when Pi reports current context usage as unknown.
+
+## Model Catalog Snapshot
+
+```ts
+type RemoteModelSummary = {
+  provider: string;
+  modelId: string;
+  name?: string;
+  reasoning: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  isScoped: boolean;
+};
+
+type ModelCatalogSnapshot = {
+  currentModel: RemoteModelSummary | null;
+  models: RemoteModelSummary[];
+  catalogVersion: string;
+  generatedAt: string;
+};
+```
+
+A Model Catalog Snapshot is TUI-reported process state. It contains only models currently available under Pi's configured authentication. `isScoped` preserves the TUI session's resolved model scope, while the full `models` array permits the all-model view. `catalogVersion` is an opaque content version used to reject stale selections. Model summaries exclude API keys, headers, base URLs, provider environment, auth-source details, and routing configuration.
+
+```ts
+type RemoteModelSelectResultEvent =
+  | { type: "remote_model_select_result"; requestId: string; ok: true; model: RemoteModelSummary; catalogVersion: string }
+  | { type: "remote_model_select_result"; requestId: string; ok: false; error: "session_busy" | "model_catalog_changed" | "model_not_found" | "model_unavailable" | "selection_failed" };
+```
+
+Runtime Status remains authoritative for the active model. A successful selection result is an action outcome, not a replacement for Runtime Status.
+
+## Agent Settlement
+
+```ts
+type AgentSettlement = {
+  settlementId: string;
+  sessionId: string;
+  projectId: string;
+};
+```
+
+An Agent Settlement is derived only from Pi `agent_settled` after at least one agent run and after automatic retry, compaction retry, and queued continuation work has stopped. Terminal aborted and error outcomes are not completed work. `settlementId` is an idempotency key for extension-to-daemon and daemon-to-gateway delivery. Settlement is not transcript content and is separate from `agent_start`/`agent_end` working state.
 
 ## Tree snapshot
 
@@ -310,6 +380,8 @@ type TranscriptStreamEvent =
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; partialResult: unknown }
   | { type: "tool_execution_end"; toolCallId: string; toolName: string; result?: unknown; isError: boolean }
   | { type: "runtime_status"; status: RuntimeStatus }
+  | { type: "remote_model_catalog"; requestId?: string; catalog: ModelCatalogSnapshot }
+  | RemoteModelSelectResultEvent
   | { type: "remote_tree_snapshot"; requestId?: string; snapshot: TreeSnapshot }
   | RemoteCompactResultEvent
   | RemoteTreeNavigationResultEvent
@@ -349,7 +421,7 @@ type RemoteSessionReplacedEvent = {
 };
 ```
 
-Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events, TUI-computed runtime-status snapshots, TUI-reported tree state, and remote-action results but do not expose raw Pi event payloads. `session_state` is sent initially and may be sent again when session-level `isStreaming` or active branch changes. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. `remote_tree_snapshot` replaces the previous cached tree snapshot for the session. Package-internal `tree_state` updates are not public stream events. Remote action result events report asynchronous command outcomes and are correlated by `requestId`; they are not stored in daemon durable state. `remote_session_replaced` tells iOS to subscribe to the replacement session before the old session closes. The initial `session_state` stream event is limited to a primary window of at most 20 recent messages plus any older assistant tool-call parents required by included tool results; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
+Stream events are daemon-normalized and public to iOS. They are derived from package-internal TUI Pi events, TUI-computed runtime-status snapshots, TUI-reported model and tree state, and remote-action results but do not expose raw Pi event payloads. `session_state` is sent initially and may be sent again when session-level `isStreaming` or active branch changes. `turn_start` and `turn_end` are lifecycle signals; transcript content remains represented by `TranscriptMessage` events. `runtime_status` replaces the previous runtime-status snapshot for the session. `remote_model_catalog` replaces the previous cached Model Catalog Snapshot, and model-selection results report asynchronous action outcomes. `remote_tree_snapshot` replaces the previous cached tree snapshot for the session. Package-internal `tree_state` updates are not public stream events. Remote action result events report asynchronous command outcomes and are correlated by `requestId`; they are not stored in daemon durable state. `remote_session_replaced` tells iOS to subscribe to the replacement session before the old session closes. The initial `session_state` stream event is limited to a primary window of at most 20 recent messages plus any older assistant tool-call parents required by included tool results; oversized string payloads in those messages are truncated to their first 10 KiB and marked with truncation metadata.
 
 ## TUI control channel
 
@@ -360,10 +432,11 @@ type TuiControlChannel = {
   status: "active" | "closing";
   lastHeartbeatAt: string;
   latestRuntimeStatus?: RuntimeStatus;
+  latestModelCatalog?: ModelCatalogSnapshot;
 };
 ```
 
-The control channel is the daemon's route for sending remote prompt, abort, compact, tree-refresh, tree-navigation, fork, and clone commands to the owning TUI extension and for receiving remote-action results. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
+The control channel is the daemon's route for sending remote prompt, abort, compact, model-refresh, model-selection, tree-refresh, tree-navigation, fork, and clone commands to the owning TUI extension and for receiving remote-action results and Agent Settlements. Loopback TUI control requests do not require a bearer token; non-loopback TUI control requests do.
 
 ## Tool state
 
