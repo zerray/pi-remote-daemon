@@ -19,7 +19,8 @@ LAN example:
 ```json
 {
   "bindAddress": "192.168.1.23:17373",
-  "advertisedBaseUrl": "http://192.168.1.23:17373"
+  "advertisedBaseUrl": "http://192.168.1.23:17373",
+  "pushGatewayBaseUrl": "https://pi-remote-control.zerray.me"
 }
 ```
 
@@ -28,11 +29,12 @@ Tailscale example:
 ```json
 {
   "bindAddress": "100.86.12.34:17373",
-  "advertisedBaseUrl": "http://100.86.12.34:17373"
+  "advertisedBaseUrl": "http://100.86.12.34:17373",
+  "pushGatewayBaseUrl": "https://pi-remote-control.zerray.me"
 }
 ```
 
-To enable completion notifications, set `pushGatewayBaseUrl` to the trusted central gateway URL in the same config file.
+Completion notifications use the trusted central gateway at `https://pi-remote-control.zerray.me`; set `pushGatewayBaseUrl` to this value in the same config file.
 
 Then open a Pi TUI session and run:
 
