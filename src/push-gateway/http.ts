@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { APNsProviderError } from "./apns.js";
 
 export type PushGatewayRouteRegistration = {
   routeId: string;
@@ -19,10 +20,45 @@ export type PushGatewayServer = {
   close(): Promise<void>;
 };
 
+export type PushGatewayErrorEvent = {
+  event: "push_gateway_request_failed";
+  errorType: "apns_provider_error" | "internal_error";
+  apnsStatus?: number;
+  apnsReason?: string;
+  errorName?: string;
+  errorCode?: string;
+};
+
+export function describePushGatewayError(error: unknown): PushGatewayErrorEvent {
+  if (error instanceof APNsProviderError) {
+    const event: PushGatewayErrorEvent = {
+      event: "push_gateway_request_failed",
+      errorType: "apns_provider_error",
+      apnsStatus: error.status,
+    };
+    const reason = boundedDiagnostic(error.reason);
+    if (reason) event.apnsReason = reason;
+    return event;
+  }
+
+  const event: PushGatewayErrorEvent = {
+    event: "push_gateway_request_failed",
+    errorType: "internal_error",
+  };
+  if (error && typeof error === "object") {
+    const errorName = boundedDiagnostic("name" in error ? error.name : undefined);
+    const errorCode = boundedDiagnostic("code" in error ? error.code : undefined);
+    if (errorName) event.errorName = errorName;
+    if (errorCode) event.errorCode = errorCode;
+  }
+  return event;
+}
+
 export async function startPushGatewayServer(options: {
   bindAddress: string;
   service: PushGatewayService;
   maxRouteCreationsPerHour?: number;
+  reportError?: (event: PushGatewayErrorEvent) => void;
 }): Promise<PushGatewayServer> {
   const routeCreations = new Map<string, number[]>();
   const maxRouteCreationsPerHour = Number.isFinite(options.maxRouteCreationsPerHour) && (options.maxRouteCreationsPerHour ?? 0) > 0
@@ -39,8 +75,16 @@ export async function startPushGatewayServer(options: {
     routeCreations.set(remoteAddress, recent);
     return true;
   };
+  const reportError = options.reportError ?? ((event: PushGatewayErrorEvent) => console.error(JSON.stringify(event)));
   const server = createServer((request, response) => {
-    void handleRequest(request, response, options.service, allowRouteCreation).catch(() => writeJson(response, 500, { error: "internal_error" }));
+    void handleRequest(request, response, options.service, allowRouteCreation).catch((error: unknown) => {
+      try {
+        reportError(describePushGatewayError(error));
+      } catch {
+        // Diagnostics must not prevent the generic HTTP failure response.
+      }
+      writeJson(response, 500, { error: "internal_error" });
+    });
   });
   const index = options.bindAddress.lastIndexOf(":");
   if (index < 0) throw new Error(`Invalid bind address: ${options.bindAddress}`);
@@ -177,6 +221,10 @@ function isHexToken(value: string): boolean {
 
 function isOpaqueId(value: string): boolean {
   return value.length > 0 && value.length <= 256;
+}
+
+function boundedDiagnostic(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(value) ? value : undefined;
 }
 
 function writeOutcome(response: ServerResponse, outcome: string, successBody: unknown): void {

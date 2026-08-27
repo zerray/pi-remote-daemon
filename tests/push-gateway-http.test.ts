@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { startPushGatewayServer, type PushGatewayService } from "../src/push-gateway/http.js";
+import { APNsProviderError } from "../src/push-gateway/apns.js";
+import { startPushGatewayServer, type PushGatewayErrorEvent, type PushGatewayService } from "../src/push-gateway/http.js";
 
 async function withGateway<T>(service: PushGatewayService, fn: (baseUrl: string) => Promise<T>): Promise<T> {
   const server = await startPushGatewayServer({ bindAddress: "127.0.0.1:0", service });
@@ -96,5 +97,37 @@ describe("central Push Gateway HTTP contract", () => {
       expect(unauthorized.status).toBe(401);
       expect(service.notifySettlement).not.toHaveBeenCalled();
     });
+  });
+
+  it("reports an APNs rejection without logging notification identifiers or capabilities", async () => {
+    const service: PushGatewayService = {
+      createRoute: vi.fn(), updateRoute: vi.fn(), revokeRoute: vi.fn(),
+      notifySettlement: vi.fn(async () => { throw new APNsProviderError(403, "InvalidProviderToken"); }),
+    };
+    const reported: PushGatewayErrorEvent[] = [];
+    const server = await startPushGatewayServer({
+      bindAddress: "127.0.0.1:0",
+      service,
+      reportError: (event) => reported.push(event),
+    });
+    try {
+      const response = await fetch(`http://${server.address}/v1/routes/route_private/agent-settled`, {
+        method: "POST",
+        headers: { authorization: "Bearer route_secret", "content-type": "application/json" },
+        body: JSON.stringify({ settlementId: "settle_private", projectId: "proj_private", sessionId: "sess_private" }),
+      });
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "internal_error" });
+      expect(reported).toEqual([{
+        event: "push_gateway_request_failed",
+        errorType: "apns_provider_error",
+        apnsStatus: 403,
+        apnsReason: "InvalidProviderToken",
+      }]);
+      expect(JSON.stringify(reported)).not.toMatch(/route_private|route_secret|settle_private|proj_private|sess_private/u);
+    } finally {
+      await server.close();
+    }
   });
 });
